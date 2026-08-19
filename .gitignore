@@ -1,0 +1,12 @@
+# This repo holds TOOLING ONLY. Project data lives in the iCloud tree and must
+# never be committed — it contains account numbers and cost-basis figures.
+*.qif
+*.QDF
+*.xlsx
+*.xlsm
+*.csv
+*.docx
+*.pdf
+HANDOFF_*.md
+events/
+.DS_Store

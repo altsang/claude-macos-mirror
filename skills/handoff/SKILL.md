@@ -73,15 +73,46 @@ What separates a good handoff from a useless one:
 - **Name prerequisites honestly.** If the work needs Quicken under Parallels and that lives on one
   machine only, say so at the top, and raise it with the user *before* transferring.
 
-## Step 3 — Transfer
+## Step 3 — Materialize, then record the handoff
 
-```bash
-$MIRROR handoff "PROJECT" --to MACHINE --note "one line" [--wait]
+Do both with ordinary file operations inside the project folder. **You do not need a CLI, a
+terminal, or computer-use** — a Cowork session is sandboxed to the project folder it was granted,
+and everything required lives there.
+
+**3a. Materialize every file.** iCloud keeps evicted files *dataless*: correct name and size in a
+listing, contents still in the cloud, and a read returns empty **with no error**. Reading a file is
+what pulls it down. So read every file in the project folder (skip `.handoff/`). This is not
+optional — it is what guarantees the other Mac receives real bytes rather than empty placeholders.
+
+**3b. Write the ownership event.** Create this file:
+
+```
+PROJECT_FOLDER/.handoff/events/TIMESTAMP-THIS_MACHINE-handoff.json
 ```
 
-This materializes every file first — iCloud keeps files *dataless* (present in `ls`, contents still
-remote, reads return empty with no error), so this is not optional — then records the ownership
-event.
+`TIMESTAMP` is UTC in the form `20260819T143052Z`; the filename must sort chronologically, because
+the newest event is what determines the current owner.
+
+```json
+{ "project": "Quicken Reconciliation",
+  "verb": "handoff",
+  "machine": "Madoka",
+  "to": "Ji-su",
+  "note": "one line summary",
+  "handoff_doc": "HANDOFF_fidelity_big_cost_basis.md",
+  "at": "20260819T143052Z" }
+```
+
+`machine` is the Mac you are on and `to` is the other one — Al's are **Madoka** (desktop) and
+**Ji-su** (laptop). Determine which you are on from device info; if you cannot, ask rather than
+guess, because a wrong owner is worse than no event.
+
+Create `.handoff/events/` if it does not exist. Never edit or delete an existing event — the log is
+append-only, because iCloud does not reliably propagate in-place modifications.
+
+*(From a terminal outside the sandbox the same thing is available as
+`mirror handoff PROJECT --to MACHINE --note "..."`, which is useful for `status` and `log` across
+projects. The skill does not need it.)*
 
 ## Step 4 — Report honestly
 

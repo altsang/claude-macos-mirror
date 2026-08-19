@@ -15,20 +15,41 @@ Counterpart to `/handoff`. Shared projects live at one path identical on both Ma
 MIRROR=~/workspace/claude-macos-mirror/bin/mirror
 ```
 
-## Step 1 — Claim and download
+## Step 1 — Materialize, verify, claim
 
-```bash
-$MIRROR pickup "PROJECT"      # omit the name to resolve whichever is addressed to this Mac
+All of this is plain file work inside the project folder. **No CLI, terminal, or computer-use
+needed** — the session is sandboxed to the project folder, and everything required is there.
+
+**1a. Read every file** in the project folder (skip `.handoff/`). iCloud keeps evicted files
+*dataless*: correct name and size in a listing, contents still remote, and a read returns empty or
+truncated **with no error**. There are no `.icloud` stub files to warn you. Reading is what pulls
+the content down, so do it before trusting anything you see.
+
+If a file still reads as empty after a retry, **stop and tell the user**. Do not proceed on partial
+data — in a financial extract that means silently reasoning from nothing.
+
+**1b. Read the ownership log** at `PROJECT_FOLDER/.handoff/events/*.json`. Sort by filename; the
+newest event determines the current owner — `to` if its verb is `handoff`, `machine` if it is
+`claim`. If the owner is not this machine, say so and check before continuing: two Macs editing one
+synced folder is what produces iCloud conflict copies.
+
+**1c. Write a claim event** so the other Mac knows you have it:
+
+```
+PROJECT_FOLDER/.handoff/events/TIMESTAMP-THIS_MACHINE-claim.json
 ```
 
-**Do not skip this and read files directly.** iCloud keeps evicted files *dataless*: correct name,
-correct size in `ls`, contents still in the cloud, and reading one returns empty or truncated data
-**with no error**. There are no `.icloud` stub files to warn you and `du` cannot see the problem.
-In a financial extract that means silently reasoning from nothing. This command forces the download
-and verifies before returning.
+```json
+{ "project": "Quicken Reconciliation",
+  "verb": "claim",
+  "machine": "Ji-su",
+  "to": "Ji-su",
+  "note": "carried over from the handoff event",
+  "handoff_doc": "HANDOFF_fidelity_big_cost_basis.md",
+  "at": "20260819T144500Z" }
+```
 
-If it reports files still remote after the timeout, **stop** and tell the user. Retrying in a
-minute usually resolves it.
+Append only — never edit or delete existing events.
 
 ## Step 2 — Load the context
 

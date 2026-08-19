@@ -185,7 +185,30 @@ bridge to the Mac — it reports the machine as e.g. `ji-su-local`. Two conseque
 So for file-heavy work, use a **local** project. Cloud projects are better when you want chats,
 instructions and memory to sync; local projects are what actually reach the disk.
 
-## 10. Custom Cowork skills already sync
+## 10. A Cowork session is sandboxed to its granted folder — put per-project state inside it
+
+The shell a Cowork session gets on the Mac is an isolated Linux VM that sees **only the project
+folder it was granted**. It cannot reach `~/workspace`, the shared `_handoff/` tree, or any other
+path, and no additional permission grant changes that. Driving Terminal via computer-use is the
+only way to run an outside binary, which is a poor way to run a one-line command.
+
+So a skill must not depend on a CLI. Everything `handoff`/`pickup` need is a file operation, and
+all of it can live in the project folder:
+
+| Operation | How the session does it |
+|---|---|
+| write the handoff document | ordinary file write |
+| record ownership | JSON file in `PROJECT/.handoff/events/` |
+| materialize dataless files | **read them** — reading is what pulls content down |
+
+Ownership events therefore live at `PROJECT/.handoff/events/TIMESTAMP-MACHINE-verb.json`
+(engine v6), not in the shared `_handoff/events/` tree where v4/v5 kept them. Verified 2026-08-19:
+an event written as a plain file by hand is read back correctly by the CLI, and vice versa.
+
+The original design put them outside the project because it looked like shared infrastructure. It
+is per-project state, and putting it outside made the skill unusable from within a session.
+
+## 11. Custom Cowork skills already sync
 
 `skills-plugin/.../manifest.json` lists user-created skills with server-issued `skillId`s,
 `creatorType: "user"`, and server timestamps — it is an account-level manifest.

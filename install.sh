@@ -3,9 +3,10 @@
 #
 # Idempotent. Touches ONLY tooling: never writes, moves or deletes project data.
 #
-#   ./install.sh                    deploy tool + skill bundles
-#   ./install.sh --link <Project>   also symlink ~/Documents/Claude/Projects/<Project>
-#   ./install.sh --check            report state, change nothing
+#   ./install.sh                      deploy tool + skill bundles
+#   ./install.sh --migrate <Project>  move a local project INTO the shared tree (first Mac)
+#   ./install.sh --link <Project>     symlink an already-shared project (second Mac)
+#   ./install.sh --check              report state, change nothing
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,6 +56,50 @@ link_project(){
   fi
 }
 
+# Move a project that currently lives only on this Mac into the shared tree, then
+# leave a symlink behind so any existing Cowork folder grant keeps resolving.
+#
+# Safety: copies first, verifies every file by md5, and only then renames the
+# original aside. The original is never deleted -- you remove the backup yourself
+# once you are satisfied.
+migrate_project(){
+  local name="$1"
+  local src="$HOME/Documents/Claude/Projects/$name"
+  local dst="$PROJECTS/$name"
+
+  [ -e "$src" ] || die "no such project: $src"
+  [ -L "$src" ] && { ok "'$name' is already a symlink into the shared tree — nothing to do"; return 0; }
+  [ -d "$src" ] || die "$src is not a directory"
+  [ -e "$dst" ] && die "'$name' already exists in the shared tree ($dst).
+     If you meant to link this Mac to it, use: ./install.sh --link $name"
+
+  echo "migrating '$name' into the shared tree"
+  mkdir -p "$dst"
+  rsync -a --exclude '.DS_Store' "$src/" "$dst/" || die "copy failed"
+  ok "copied"
+
+  # verify before touching the original
+  local a b
+  a="$(cd "$src" && find . -type f ! -name '.DS_Store' -exec md5 -q {} \; -print | paste - - | sort)"
+  b="$(cd "$dst" && find . -type f ! -name '.DS_Store' -exec md5 -q {} \; -print | paste - - | sort)"
+  if [ "$a" != "$b" ]; then
+    echo "VERIFICATION FAILED — leaving everything as it was." >&2
+    diff <(echo "$a") <(echo "$b") | head -20 >&2
+    die "refusing to move the original"
+  fi
+  ok "verified $(echo "$a" | grep -c . ) files identical by md5"
+
+  local bak="$HOME/Documents/Claude/Projects/.$name.pre-icloud-$(date +%Y%m%d-%H%M%S)"
+  mv "$src" "$bak" || die "could not move original aside"
+  ln -s "$dst" "$src"
+  ok "symlinked $src -> $dst"
+  ok "original preserved at $bak"
+  echo
+  echo "  Keep that backup until you have confirmed Cowork still reads the project."
+  echo "  On your OTHER Mac, once iCloud has carried it over:"
+  echo "      ./install.sh --link \"$name\""
+}
+
 case "${1:-}" in
   --check) check; exit 0;;
 esac
@@ -87,10 +132,10 @@ else
   echo "  ! zip not found — skill bundles not packaged"
 fi
 
-if [ "${1:-}" = "--link" ]; then
-  [ -n "${2:-}" ] || die "--link needs a project name"
-  link_project "$2"
-fi
+case "${1:-}" in
+  --link)    [ -n "${2:-}" ] || die "--link needs a project name";    link_project "$2";;
+  --migrate) [ -n "${2:-}" ] || die "--migrate needs a project name"; migrate_project "$2";;
+esac
 
 echo
 echo "Next, once per project, in the Claude desktop app:"

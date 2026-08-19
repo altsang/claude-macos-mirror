@@ -62,67 +62,125 @@ directory inside a synced folder is precisely the conflict-copy hazard described
 
 ---
 
-## Setting up a new Mac
+## Getting a project onto both Macs
+
+Do this once per project. After that you only ever run `handoff` and `pickup`.
+
+### Step 0 — install the tooling on each Mac (once per machine)
 
 ```bash
-git clone <this repo> ~/workspace/claude-macos-mirror
+git clone https://github.com/altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
 cd ~/workspace/claude-macos-mirror
-./install.sh                 # deploys the tool into the iCloud tree
-./install.sh --link Finances # symlink one project into ~/Documents/Claude/Projects
+./install.sh
 ```
 
-Then, once per project, in the Claude desktop app:
+Both Macs must be signed in to the **same Apple ID** in iCloud Drive. Check with:
 
-1. Open (or start) a Cowork session on that Mac.
-2. Grant it the folder `~/Documents/Claude/Projects/<Name>`.
-   If the sandbox refuses to follow the symlink, grant the iCloud path directly instead — it is the
-   same on both machines, so this is still a one-time step.
-3. Import `handoff.skill` and `pickup.skill` from `_handoff/` if they are not already present.
-   (Custom skills normally sync on their own; check before importing.)
+```bash
+defaults read MobileMeAccounts Accounts | grep AccountID
+```
 
-Prerequisite check: iCloud Drive must be signed in to the **same Apple ID** on both Macs. Confirm
-with `defaults read MobileMeAccounts Accounts | grep AccountID`.
+### Step 1 — move the project into the shared tree
+
+Run this **on the Mac that already has the project**:
+
+```bash
+./install.sh --migrate "Finances"
+```
+
+That copies `~/Documents/Claude/Projects/Finances` into the iCloud tree, verifies every file by
+md5, and only then renames the original aside and leaves a symlink in its place. Your existing
+Cowork folder grant keeps working, because the path it points at is unchanged.
+
+The original is preserved as `.Finances.pre-icloud-<timestamp>` and is never deleted. Keep it until
+you have confirmed Cowork still reads the project, then remove it yourself.
+
+If verification fails, nothing is moved and the command refuses to continue.
+
+### Step 2 — link it on the other Mac
+
+Wait for iCloud to carry the folder over — a minute or so if the Mac is awake — then:
+
+```bash
+./install.sh --link "Finances"
+```
+
+If a real (non-symlink) directory of that name already exists there, the command stops and tells
+you to move it aside yourself. It will not clobber project files.
+
+### Step 3 — point Cowork at it (once per machine)
+
+In the Claude desktop app on that Mac:
+
+1. Start a **new Cowork session**. The space from the other Mac will **not** be there — see the
+   table at the top. That is expected, not a failure.
+2. Grant it the folder `~/Documents/Claude/Projects/Finances`.
+   If the sandbox refuses to follow the symlink, grant the iCloud path directly instead; it is
+   identical on both machines, so this is still a one-time step.
+3. Import `handoff.skill` and `pickup.skill` from `_handoff/` if they are not already in your
+   skills list. Custom skills usually sync on their own — check before importing.
+
+Both Macs can now see the same files. From here it is just the loop below.
 
 ---
 
-## Daily use
+## Going back and forth
 
-Resolve the newest tool version rather than hardcoding one — releases are new files, never edits:
+This is the part you do repeatedly. Resolve the newest tool version rather than hardcoding one —
+releases are new files, never edits:
 
 ```bash
 COWORKCTL="$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v*.sh | sort -V | tail -1)"
 ```
 
-**Send work to the other Mac:**
+**On the Mac you are leaving:**
 
 ```bash
-bash "$COWORKCTL" handoff Finances --to Ji-su --note "6 securities remain" [--wait]
+bash "$COWORKCTL" handoff Finances --to Ji-su --note "6 securities remain"
 ```
 
-Writes an ownership event and materializes every file so real bytes exist to upload. Before running
-it, write or refresh `HANDOFF_<topic>.md` in the project folder — the `/handoff` skill does this for
-you, and it is the part that actually matters.
+Before running it, write or refresh `HANDOFF_<topic>.md` in the project folder. The `/handoff`
+skill does this for you and it is the part that actually matters — the other machine gets your
+files automatically but knows nothing about your conversation.
 
-**Pick work up on the other Mac:**
+Then stop editing the project on this Mac.
+
+**On the Mac you are moving to:**
 
 ```bash
 bash "$COWORKCTL" pickup Finances
 ```
 
-Forces iCloud to deliver file contents, claims ownership, and prints the handoff document. On that
-machine, start a **new Cowork session** — the space from the other Mac will not be there — grant it
-the shared folder, and give it the document.
+This forces iCloud to deliver real file contents, claims ownership, and prints the handoff
+document. Start a **new Cowork session** there, grant it the shared folder if you have not already,
+and give it that document as its first message.
 
-**Other commands:**
+**Coming back** is the same two commands with the machines reversed. The ownership log accumulates,
+so `log` shows the whole history:
 
 ```bash
-bash "$COWORKCTL" status          # who owns what, on this machine
+bash "$COWORKCTL" status          # who owns what, from this machine
 bash "$COWORKCTL" log Finances    # full ownership history
 bash "$COWORKCTL" conflicts       # report iCloud conflict copies (reports only, never deletes)
 bash "$COWORKCTL" materialize <p> # force-download a path
 ```
 
----
+### What the loop looks like in practice
+
+```
+Madoka                                    Ji-su
+------                                    -----
+/handoff  ──── writes HANDOFF_x.md ───▶
+          ──── files + event via iCloud ─▶
+                                          /pickup
+                                          (new Cowork session, grant folder,
+                                           paste the handoff doc, do the work)
+          ◀─── files + event via iCloud ── /handoff
+/pickup
+```
+
+Nothing about the *project* moves. The files and the brief move, and each machine runs its own
+Cowork session over the same folder.
 
 ## Expectations that will save you confusion
 

@@ -1,37 +1,43 @@
 ---
 name: handoff
-description: Hand the current project's workload to the user's other Mac (Madoka <-> Ji-su). Use when the user says to hand off, move, send, or continue work on their other machine or laptop, or invokes /handoff by name. Writes a self-contained handoff document capturing everything the other machine needs, then transfers the files and ownership. Use this instead of improvising a summary, because the receiving machine starts with no memory of this conversation.
+description: Hand the current project's workload to the user's other Mac (Madoka <-> Ji-su). Use when the user says to hand off, move, send, or continue work on their other machine or laptop, or invokes /handoff by name. Writes a self-contained handoff document capturing everything the other machine needs, then transfers ownership of the shared folder. Use this instead of improvising a summary, because a local Cowork project cannot sync its chats and the receiving machine starts with no memory of this conversation.
 ---
 
 # Hand off a workload to the other Mac
 
-Al works across two Macs, **Madoka** (desktop) and **Ji-su** (laptop). Shared projects live at
-one path that is identical on both machines:
+Al works across two Macs, **Madoka** (desktop) and **Ji-su** (laptop). Shared projects live at one
+path identical on both:
 
 ```
 ~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/<Project>
 ```
 
-Always invoke the tool by resolving the newest version — never hardcode a version number:
+Run everything through the `mirror` CLI:
 
 ```bash
-COWORKCTL="$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v*.sh | sort -V | tail -1)"
+MIRROR=~/workspace/claude-macos-mirror/bin/mirror
 ```
 
-The receiving machine gets the **files** automatically. What it does not get is **this
-conversation**. Everything you know that isn't written down is lost at the handoff. That is the
-entire reason this skill exists — the file transfer is the easy half.
+If that path does not exist, fall back to the engine in the shared tree:
+`bash "$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v*.sh | sort -V | tail -1)"`.
+
+## Why this skill exists
+
+The receiving Mac gets the **files** automatically. It does **not** get this conversation, and it
+cannot: **chat is not available for local Cowork projects**, so there is no synced history and no
+project memory to fall back on. Everything you know that isn't written down is lost at the handoff.
+The document is the deliverable; moving bytes is the easy half.
 
 ## Step 1 — Identify project and target
 
-Project = the folder under the shared `Projects/` tree this session has been working in.
-Target = whichever of Madoka / Ji-su is not this machine (`scutil --get ComputerName`).
-Ask only if genuinely ambiguous.
+Project = the folder under the shared `Projects/` tree this session is working in. Target =
+whichever of Madoka / Ji-su is not this machine (`scutil --get ComputerName`). Ask only if
+genuinely ambiguous. `$MIRROR status` shows what is shared and who owns it.
 
 ## Step 2 — Write the handoff document
 
-Write `HANDOFF_<topic>.md` into the project folder. **This is the deliverable.** Assume the reader
-is a competent agent with zero context who will act on it literally.
+Write `HANDOFF_<topic>.md` into the project folder. Assume a competent agent with zero context who
+will act on it literally.
 
 ```markdown
 # HANDOFF — <one-line subject>
@@ -58,41 +64,30 @@ Failure modes already hit. Silent ones first.
 
 What separates a good handoff from a useless one:
 
-- **Put in the numbers.** "Fix the cost basis" is useless; "THW verified exact at $31,461.60"
-  lets the next agent check itself.
+- **Put in the numbers.** "Fix the cost basis" is useless; "THW verified exact at $31,461.60" lets
+  the next agent check itself.
 - **Record dead ends.** "There are NO return-of-capital transactions in 2026 — do not go looking"
   saves an hour.
 - **Mark finished work so it isn't redone.** Repeating a completed financial correction is worse
   than never starting.
 - **Name prerequisites honestly.** If the work needs Quicken under Parallels and that lives on one
-  machine only, say so at the top. Raise it with the user *before* transferring, not after.
+  machine only, say so at the top, and raise it with the user *before* transferring.
 
 ## Step 3 — Transfer
 
 ```bash
-bash "$COWORKCTL" handoff <Project> --to <Machine> --note "<one line>" [--wait]
+$MIRROR handoff "<Project>" --to <Machine> --note "<one line>" [--wait]
 ```
 
-**The transport is iCloud, and it is not synchronous.** Measured between these two Macs: ~54s at
-best, several minutes if the far Mac has been asleep, and stalled entirely while it naps. The
-command materializes the files (so real bytes exist to upload), records the handoff, and returns.
-
-Direct rsync over SSH was built and worked — 0.95s, md5-verified — but writing into an
-iCloud-synced folder means two writers for one path, and FileProvider forks them into
-`(name) 2.ext` conflict copies rather than reconciling. Real ones appeared on both Macs. One
-writer only, so iCloud carries everything now. Do not add a direct push back in.
-
-`--wait` polls for the other machine's claim and reports the ACK when it lands. Use it when the
-other Mac is awake and you want confirmation; skip it when it's asleep, since the wait will just
-time out at ~6min.
+This materializes every file first — iCloud keeps files *dataless* (present in `ls`, contents still
+remote, reads return empty with no error), so this is not optional — then records the ownership
+event.
 
 ## Step 4 — Report honestly
 
-The work is **staged, not delivered**. Say that plainly — do not describe a handoff as complete
-just because the command exited 0. Delivery is proven only when `/pickup` runs on the other Mac.
+The work is **staged, not delivered**. iCloud takes ~1 minute at best and longer if the other Mac
+has been asleep; a zero exit code is not proof of arrival. Delivery is confirmed only when
+`/pickup` runs over there.
 
-Tell the user not to edit the project here until it comes back. Two machines editing one synced
-folder is precisely what produces conflict copies, and the ownership record is what prevents it.
-
-If they need it *now* and the other Mac is awake, the honest answer is that iCloud will take about
-a minute — not that it's already there.
+Tell the user not to edit the project here until it comes back — two Macs editing one synced folder
+produces iCloud conflict copies, and the ownership record is what prevents that.

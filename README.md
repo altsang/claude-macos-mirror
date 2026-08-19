@@ -17,23 +17,71 @@ This is the single most important thing in the repo, and getting it wrong wastes
 |---|---|
 | **Project files** on disk | ✅ yes — that is what this repo does |
 | **Custom Cowork skills** | ✅ yes — automatically, at the account level. Never copy them by hand |
-| **claude.ai Projects** | ✅ yes — web, and every Mac |
-| **Cowork spaces** (a Cowork "project") | ❌ **no — device-local, never syncs** |
-| **Folder grants** (which dir a project may read) | ❌ no — set once per machine |
+| **Projects with no local folder** ("cloud projects") | ✅ yes — server-side; web and every Mac |
+| **Projects with a local folder** (`Local` badge) | ⚠️ not automatically — but the definition **is** copyable, see below |
+| **Conversations inside a local project** | ❌ never. This is why the handoff document exists |
+| **Folder grants** (which dir a project may read) | ❌ no — per-machine |
 
-**A Cowork space cannot travel.** Verified by reading `claude.ai/projects` directly: none of the
-Cowork spaces on Madoka appear there, and `claude.ai/project/<spaceId>` does not resolve. Cowork
-spaces and claude.ai Projects are two different systems that happen to look alike in the UI.
+### The rule: attaching a folder makes a project machine-bound
 
-So "moving a workload" does **not** mean the project shows up on the other Mac. It means:
+A Claude project lives in one of two places, and the deciding factor is whether you have attached a
+local folder to it:
 
-> the **files** are already there, and a **handoff document** brings a fresh session up to speed.
+- **No folder attached** → the project lives on the server. It appears on claude.ai and on every
+  Mac, automatically.
+- **A folder attached** → the project is written into *that Mac's* `spaces.json`, gets the `Local`
+  badge in the UI, and is invisible on the web and on your other Mac.
 
-That document is the load-bearing part. The file sync is the easy half.
+That is the whole explanation for "some projects are only on this Mac, some only on that one, and
+some are everywhere." Counted on one setup: 8 cloud projects visible in all three places, 11 local
+to one Mac, 2 local to the other. The local counts match `spaces.json` on each machine exactly.
 
-Related trap: in the local session JSON, `title` is the **chat** name and `spaceId` is the space —
-the space's own name is not stored locally at all. Don't infer a project name from a folder name or
-a chat title.
+### Where local projects live
+
+```
+~/Library/Application Support/Claude/local-agent-mode-sessions/<account-uuid>/<org-uuid>/spaces.json
+```
+
+A plain JSON file. Each entry is the entire project definition:
+
+```json
+{ "spaces": [
+  { "id": "a8bf01fc-…",
+    "name": "Quicken Reconciliation",
+    "folders": [ { "path": "/Users/you/Documents/Claude/Projects/Quicken Reconciliation" } ],
+    "projects": [], "links": [],
+    "instructions": "I use Quicken and …",
+    "createdAt": 1775931264418, "updatedAt": 1776300860934 } ] }
+```
+
+Two consequences worth knowing:
+
+**A local project can be copied to the other Mac.** It is a JSON object — name, instructions,
+folder paths. Add the entry to the other machine's `spaces.json`, rewrite `folders[].path` for that
+machine, and the project appears there with the same name and instructions, pointed at the mirrored
+folder. See *Copying a local project* below.
+
+**The `Local` badge reads straight from this file.** The UI shows the folder name next to the badge
+only when an entry has exactly one folder; entries with several show a bare `Local` badge. Useful
+sanity check when reconciling what you see against what is on disk.
+
+**Edit it only while Claude is quit.** A running app will rewrite the file from memory and discard
+your change. `mirror project-import` and `project-repath` enforce this; they refuse to run while
+the app is open.
+
+### What still does not travel
+
+The **conversations** inside a local project. Copying the definition gives you the project shell,
+its instructions and its folder wiring — not its chat history. So moving a workload is still:
+
+> the **files** are already there, the **project definition** can be copied, and a **handoff
+> document** brings a fresh conversation up to speed.
+
+That document remains the load-bearing part.
+
+Related trap: in the local session JSON, `title` is the **chat** name and `spaceId` points at the
+entry in `spaces.json`. Don't infer a project name from a folder name or a chat title — check
+`spaces.json`, which is the only local place a project's real name is recorded.
 
 ---
 
@@ -193,13 +241,69 @@ ln -s ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/Projects/"Quicken R
 This is not optional on iCloud. Files show correct names and sizes in `ls` while their contents are
 still in the cloud, and reading one returns empty **with no error**.
 
-**12. Set up Cowork on B.** In the Claude app on B:
+**12. Get the project onto B.** It will **not** appear on its own — a project with a folder
+attached is machine-bound. Two ways, and the first is usually what you want.
 
-- Start a **new Cowork session**. The project from A will **not** appear — Cowork spaces are
-  device-local. That is expected; see the table at the top of this README.
-- Grant it `~/Documents/Claude/Projects/<Project>`.
-- Import `handoff.skill` and `pickup.skill` from the shared `_handoff/` folder if they are not
-  already in your skills list.
+*Option A — copy the project definition* (same name, same instructions, already wired to the
+folder):
+
+```bash
+# on A
+./bin/mirror project-export "Quicken Reconciliation"
+# on B, with Claude quit
+./bin/mirror project-import "Quicken Reconciliation"
+```
+
+See *Copying a local project* below for what travels and what does not.
+
+*Option B — recreate it by hand.* In the Claude app on B, make a new project, give it the same
+name and instructions, and attach `~/Documents/Claude/Projects/<Project>`.
+
+Either way, import `handoff.skill` and `pickup.skill` from the shared `_handoff/` folder if they
+are not already in your skills list.
+
+Note that **the conversations do not come across** with either option. That is what the handoff
+document is for.
+
+### Copying a local project to the other Mac
+
+A local project is a JSON entry, so it can be copied. The definition travels through the shared
+drive — no SSH, and it works even if the other Mac is off right now.
+
+**On A** (the Mac that has the project):
+
+```bash
+./bin/mirror project-list                              # see what is local to this Mac
+./bin/mirror project-export "Quicken Reconciliation"   # writes _handoff/projects/<Name>.json
+```
+
+The export carries the project's **name, instructions and id**, and deliberately drops the folder
+paths — those are per-machine.
+
+**On B**, once the drive has carried it over and **Claude is quit**:
+
+```bash
+./bin/mirror project-import "Quicken Reconciliation"
+```
+
+It backs up `spaces.json`, splices the entry in, and points `folders[]` at this machine's
+`~/Documents/Claude/Projects/<Name>` (falling back to the shared tree path if the symlink is not
+there yet). Relaunch Claude and the project appears — same name, same instructions, wired to the
+mirrored folder.
+
+`project-import` refuses to run while Claude is open, because a live app rewrites `spaces.json`
+from memory and would silently discard the change. `project-export` is read-only and safe any time.
+
+**Its chat history will be empty.** That does not travel and never will — run `mirror pickup` to
+load the handoff document into a fresh conversation.
+
+To repoint a project at a different folder — after a rename, say:
+
+```bash
+./bin/mirror project-repath "Quicken Reconciliation" ~/Documents/Claude/Projects/"Quicken Reconciliation"
+```
+
+Both write a timestamped `spaces.json.bak-*` before touching anything.
 
 ### Part 3 — verify the mirror
 

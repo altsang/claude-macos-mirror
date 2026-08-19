@@ -96,17 +96,43 @@ ssh <peer> 'uptime; pmset -g ps'
 ssh <peer> 'nohup caffeinate -dimsu -t 900 >/dev/null 2>&1 &'   # pin awake for a test window
 ```
 
-## 7. Cowork spaces are not claude.ai Projects
+## 7. Attaching a folder makes a project machine-bound
 
-Verified by reading `claude.ai/projects` directly. claude.ai Projects sync across web and both Macs.
-Cowork spaces carry a `spaceId` UUID in `local-agent-mode-sessions/*/*/local_*.json`, are
-**device-local**, and never sync; `claude.ai/project/<spaceId>` does not resolve.
+A Claude project lives in one of two places, decided by whether a local folder is attached:
 
-None of Madoka's Cowork spaces appear in the claude.ai project list. This is why some projects
-appear on only one machine and others everywhere.
+- **No folder** → server-side. Appears on claude.ai and on every Mac.
+- **Folder attached** → written into *that Mac's* `spaces.json`, shown with a `Local` badge, and
+  invisible on the web and on the other Mac.
 
-Also: the session `title` field is the **chat** name, not the project name. The space's own name is
-not stored locally at all.
+```
+~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/spaces.json
+```
+
+Plain JSON. Each entry is the whole definition: `id`, `name`, `folders[].path`, `instructions`,
+`createdAt`, `updatedAt`.
+
+Counted on one setup: 8 cloud projects visible on the web and both Macs; 11 local to Madoka; 2
+local to Ji-su. The local counts match each machine's `spaces.json` exactly. The UI shows a folder
+name beside the badge only when an entry has exactly one folder — entries with several show a bare
+`Local` badge, which is a handy way to sanity-check the UI against the file.
+
+**A local project therefore CAN be copied** — it is a JSON object. `mirror project-export` writes
+it into the shared tree, `mirror project-import` splices it into the other Mac's `spaces.json` with
+the folder path rewritten. What does **not** travel is the conversation history inside the project;
+that is what the handoff document is for.
+
+Edit `spaces.json` only while Claude is quit — a running app rewrites it from memory and silently
+discards the change. `project-import` and `project-repath` refuse to run otherwise.
+
+**How this was originally got wrong.** An earlier pass concluded "Cowork spaces are device-local and
+cannot travel", from two bad inferences: `claude.ai/projects` did not list them (true, but only
+because folder-attached projects are not server-side), and `claude.ai/project/<id>` did not resolve
+(true, but the Cowork URL form is `claude.ai/cowork/project/<id>`). Neither was evidence that the
+definition was unmovable. `spaces.json` was never opened. The lesson: when concluding that
+something is impossible, find the file that stores it first.
+
+Related: in session JSON, `title` is the **chat** name and `spaceId` points at the `spaces.json`
+entry. A project's real name is recorded only in `spaces.json`.
 
 ## 8. Custom Cowork skills already sync
 

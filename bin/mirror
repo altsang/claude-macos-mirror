@@ -10,6 +10,11 @@
 #   mirror migrate <Project>         move a local project INTO the shared tree
 #   mirror link <Project>            symlink an already-shared project on this Mac
 #   mirror rename <Old> <New>        rename a shared project everywhere
+#
+#   mirror project-list              local projects defined on THIS Mac
+#   mirror project-export <Name>     write a project definition into the shared tree
+#   mirror project-import <Name>     add an exported definition to THIS Mac
+#   mirror project-repath <Name> <p> repoint a project's folder
 #   mirror check                     report state, change nothing
 #
 #   mirror status                    who owns what
@@ -194,6 +199,123 @@ cmd_rename(){
   echo "         mirror link \"$new\""
 }
 
+# ---- local project definitions (spaces.json) --------------------------------
+#
+# A project with a folder attached is machine-bound: it lives in this Mac's
+# spaces.json and never reaches the web or the other Mac. The file is plain JSON,
+# so a project CAN be copied -- export it into the shared tree here, import it
+# there. What does not come across is the conversation history; that is what the
+# handoff document carries.
+#
+# All of these refuse to run while Claude is open, because a live app rewrites
+# spaces.json from memory and would discard the edit.
+
+spaces_file(){
+  local f
+  for f in "$HOME/Library/Application Support/Claude/local-agent-mode-sessions"/*/*/spaces.json; do
+    case "$f" in *skills-plugin*) continue;; esac
+    [ -f "$f" ] && { echo "$f"; return 0; }
+  done
+  return 1
+}
+
+require_claude_quit(){
+  if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+    die "Claude is running. Quit it first — a live app rewrites spaces.json from memory
+     and will silently discard this change."
+  fi
+}
+
+cmd_project_list(){
+  local f; f="$(spaces_file)" || die "no spaces.json found (has Cowork ever run on this Mac?)"
+  python3 - "$f" <<'PY'
+import json,sys,os
+d=json.load(open(sys.argv[1]))
+sp=d.get("spaces",[])
+print(f"{len(sp)} local project(s) on this Mac:")
+for x in sp:
+    paths=[p.get("path") for p in (x.get("folders") or [])]
+    bad=[p for p in paths if not os.path.exists(p)]
+    print(f'  {x["name"]}')
+    for p in paths:
+        print(f'      {"✗" if p in bad else "•"} {p}')
+PY
+}
+
+cmd_project_export(){
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror project-export <Name>"
+  local f; f="$(spaces_file)" || die "no spaces.json on this Mac"
+  mkdir -p "$HANDOFF/projects"
+  python3 - "$f" "$name" "$HANDOFF/projects" <<'PY'
+import json,sys,os
+src,name,outdir=sys.argv[1],sys.argv[2],sys.argv[3]
+d=json.load(open(src))
+e=next((x for x in d.get("spaces",[]) if x["name"]==name),None)
+if e is None:
+    print(f'no local project named "{name}". Try: mirror project-list',file=sys.stderr); sys.exit(1)
+out=dict(e)
+# folder paths are per-machine; the importer sets its own
+out["folders"]=[]
+out["_exported_from_paths"]=[p.get("path") for p in (e.get("folders") or [])]
+dest=os.path.join(outdir,f"{name}.json")
+json.dump(out,open(dest,"w"),indent=2)
+print(f'  exported "{name}" -> _handoff/projects/{name}.json')
+print(f'  instructions: {"yes" if e.get("instructions") else "none"}')
+PY
+  echo "  The other Mac picks it up with:  mirror project-import \"$name\""
+}
+
+cmd_project_import(){
+  require_claude_quit
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror project-import <Name>"
+  local src="$HANDOFF/projects/$name.json"
+  [ -f "$src" ] || die "no exported definition at $src
+     Run 'mirror project-export \"$name\"' on the other Mac first, and give the drive time to sync."
+  local f; f="$(spaces_file)" || die "no spaces.json on this Mac (open Cowork once to create it)"
+  cp "$f" "$f.bak-$(date +%Y%m%d-%H%M%S)"
+  python3 - "$f" "$src" "$PROJECTS" <<'PY'
+import json,sys,os
+dst,src,projects=sys.argv[1],sys.argv[2],sys.argv[3]
+d=json.load(open(dst)); e=json.load(open(src))
+e.pop("_exported_from_paths",None)
+name=e["name"]
+if any(x.get("id")==e.get("id") or x.get("name")==name for x in d.get("spaces",[])):
+    print(f'  "{name}" already exists on this Mac — nothing to do'); sys.exit(0)
+local=os.path.expanduser(f"~/Documents/Claude/Projects/{name}")
+shared=os.path.join(projects,name)
+path = local if os.path.exists(local) else (shared if os.path.exists(shared) else local)
+e["folders"]=[{"path":path}]
+d.setdefault("spaces",[]).insert(0,e)
+json.dump(d,open(dst,"w"),indent=2)
+print(f'  added "{name}"')
+print(f'  folder: {path}' + ('' if os.path.exists(path) else '   <-- does not exist yet; run mirror link first'))
+PY
+  echo "  Relaunch Claude. The project appears with its name and instructions."
+  echo "  Its chat history will be empty — that is expected; use 'mirror pickup' for context."
+}
+
+cmd_project_repath(){
+  require_claude_quit
+  local name="${1:-}" path="${2:-}"
+  [ -n "$name" ] && [ -n "$path" ] || die "usage: mirror project-repath <Name> <folder-path>"
+  path="${path/#\~/$HOME}"
+  [ -e "$path" ] || die "no such path: $path"
+  local f; f="$(spaces_file)" || die "no spaces.json on this Mac"
+  cp "$f" "$f.bak-$(date +%Y%m%d-%H%M%S)"
+  python3 - "$f" "$name" "$path" <<'PY'
+import json,sys
+dst,name,path=sys.argv[1],sys.argv[2],sys.argv[3]
+d=json.load(open(dst))
+e=next((x for x in d.get("spaces",[]) if x["name"]==name),None)
+if e is None: print(f'no local project named "{name}"',file=sys.stderr); sys.exit(1)
+old=[p.get("path") for p in (e.get("folders") or [])]
+e["folders"]=[{"path":path}]
+json.dump(d,open(dst,"w"),indent=2)
+print(f'  "{name}" folders: {old} -> [{path}]')
+PY
+  echo "  Relaunch Claude for it to take effect."
+}
+
 case "${1:-help}" in
   use-root) shift; cmd_use_root "$@";;
   deploy)   shift; cmd_deploy "$@";;
@@ -201,6 +323,10 @@ case "${1:-help}" in
   link)     shift; cmd_link "$@";;
   migrate)  shift; cmd_migrate "$@";;
   rename)   shift; cmd_rename "$@";;
+  project-list)   shift; cmd_project_list "$@";;
+  project-export) shift; cmd_project_export "$@";;
+  project-import) shift; cmd_project_import "$@";;
+  project-repath) shift; cmd_project_repath "$@";;
   status|handoff|pickup|log|conflicts|materialize)
             e="$(engine)" || exit 1; exec bash "$e" "$@";;
   help|-h|--help) usage;;

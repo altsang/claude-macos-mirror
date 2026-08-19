@@ -89,14 +89,14 @@ defaults read MobileMeAccounts Accounts | grep AccountID
 Run this **on the Mac that already has the project**:
 
 ```bash
-./bin/mirror migrate "Finances"
+./bin/mirror migrate "Quicken Reconciliation"
 ```
 
-That copies `~/Documents/Claude/Projects/Finances` into the iCloud tree, verifies every file by
+That copies `~/Documents/Claude/Projects/Quicken Reconciliation` into the iCloud tree, verifies every file by
 md5, and only then renames the original aside and leaves a symlink in its place. Your existing
 Cowork folder grant keeps working, because the path it points at is unchanged.
 
-The original is preserved as `.Finances.pre-icloud-<timestamp>` and is never deleted. Keep it until
+The original is preserved as `.<Project>.pre-icloud-<timestamp>` and is never deleted. Keep it until
 you have confirmed Cowork still reads the project, then remove it yourself.
 
 If verification fails, nothing is moved and the command refuses to continue.
@@ -106,7 +106,7 @@ If verification fails, nothing is moved and the command refuses to continue.
 Wait for iCloud to carry the folder over — a minute or so if the Mac is awake — then:
 
 ```bash
-./bin/mirror link "Finances"
+./bin/mirror link "Quicken Reconciliation"
 ```
 
 If a real (non-symlink) directory of that name already exists there, the command stops and tells
@@ -118,7 +118,7 @@ In the Claude desktop app on that Mac:
 
 1. Start a **new Cowork session**. The space from the other Mac will **not** be there — see the
    table at the top. That is expected, not a failure.
-2. Grant it the folder `~/Documents/Claude/Projects/Finances`.
+2. Grant it the folder `~/Documents/Claude/Projects/Quicken Reconciliation`.
    If the sandbox refuses to follow the symlink, grant the iCloud path directly instead; it is
    identical on both machines, so this is still a one-time step.
 3. Import `handoff.skill` and `pickup.skill` from `_handoff/` if they are not already in your
@@ -128,13 +128,16 @@ Both Macs can now see the same files. From here it is just the loop below.
 
 ### If the folder name doesn't match the project name
 
-Cowork project names and folder names drift apart easily — a project called
-**Quicken Reconciliation** whose folder is `Finances` will have you typing the wrong one
-every time. The folder name is what appears in every `mirror` command, so it is worth aligning:
+Cowork project names and folder names drift apart easily. The folder name is what appears in every
+`mirror` command, so a project called **Quicken Reconciliation** living in a folder named
+`Finances` will have you typing the wrong one every time. Align them:
 
 ```bash
 ./bin/mirror rename "Finances" "Quicken Reconciliation"
 ```
+
+(That exact rename was done on 2026-08-19: folder, 9 events of ownership history, and both Macs'
+symlinks, with 17/17 files verified identical afterwards and no conflict copies.)
 
 That renames the shared folder, moves its ownership history, and repoints this Mac's symlink.
 Two things it cannot do for you, and it prints both:
@@ -152,7 +155,7 @@ Do this before you have much handoff history, and ideally while only one Mac is 
 This is the part you do repeatedly. **On the Mac you are leaving:**
 
 ```bash
-mirror handoff Finances --to Ji-su --note "6 securities remain"
+mirror handoff "Quicken Reconciliation" --to Ji-su --note "6 securities remain"
 ```
 
 Before running it, write or refresh `HANDOFF_<topic>.md` in the project folder. The `/handoff`
@@ -164,7 +167,7 @@ Then stop editing the project on this Mac.
 **On the Mac you are moving to:**
 
 ```bash
-mirror pickup Finances
+mirror pickup "Quicken Reconciliation"
 ```
 
 This forces iCloud to deliver real file contents, claims ownership, and prints the handoff
@@ -176,7 +179,7 @@ so `log` shows the whole history:
 
 ```bash
 mirror status          # who owns what, from this machine
-mirror log Finances    # full ownership history
+mirror log "Quicken Reconciliation"   # full ownership history
 mirror conflicts       # report iCloud conflict copies (reports only, never deletes)
 mirror materialize <p> # force-download a path
 ```

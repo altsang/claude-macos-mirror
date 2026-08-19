@@ -62,91 +62,169 @@ directory inside a synced folder is precisely the conflict-copy hazard described
 
 ---
 
-## Getting a project onto both Macs
+## Runbook — mirror a project to another machine, start to finish
 
-Do this once per project. After that you only ever run `handoff` and `pickup`.
+Machine **A** is the Mac that already has the project. Machine **B** is the one you want to move
+work to. Every command is copy-pasteable; expected output is shown where it matters.
 
-### Step 0 — install the tooling on each Mac (once per machine)
+### Part 0 — pick the shared drive (once, ever)
+
+Any folder that syncs between the two Macs works: **iCloud Drive**, **Google Drive**, **Dropbox**.
+The tool defaults to iCloud. Trade-offs:
+
+| Drive | Path | Notes |
+|---|---|---|
+| **iCloud Drive** (default) | `~/Library/Mobile Documents/com~apple~CloudDocs/` | Same path on any Mac regardless of Apple ID. Files go *dataless* when evicted — handled by `pickup` |
+| **Google Drive** | `~/Library/CloudStorage/GoogleDrive-<email>/My Drive/` | Path embeds the account email, so it can differ per machine — set it per machine with `use-root`. Check whether it is in "stream" mode, which makes files on-demand |
+| **Dropbox** | `~/Library/CloudStorage/Dropbox/` | Same path on both. Watch for selective-sync excluding the folder |
+
+The paths do **not** have to match across machines. The stable path is the symlink at
+`~/Documents/Claude/Projects/<Project>`, and the Cowork folder grant is per-machine anyway.
+
+Whatever you choose, confirm it is actually syncing between both Macs **before** you start — put a
+file in it on A and watch it appear on B. Every hard-to-debug failure in this system traces back to
+a drive that wasn't syncing.
+
+### Part 1 — on machine A (has the project)
+
+**1. Clone and install.**
 
 ```bash
 git clone https://github.com/altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
 cd ~/workspace/claude-macos-mirror
+```
+
+**2. If you are NOT using iCloud, point it at your drive.**
+
+```bash
+./bin/mirror use-root "~/Library/CloudStorage/GoogleDrive-you@gmail.com/My Drive/Claude"
+```
+
+Skip this for iCloud. Verify either way:
+
+```bash
+./bin/mirror check
+#   shared root: …/Claude
+#   ✓ shared tree present     ← if this is ✗, the drive is not synced yet. Stop and fix that.
+```
+
+**3. Deploy the tooling into the shared tree.**
+
+```bash
 ./bin/mirror deploy
 ```
 
-Both Macs must be signed in to the **same Apple ID** in iCloud Drive. Check with:
+**4. Find the project's folder name.** This is the folder Cowork granted, *not* the project title —
+they are often different. In the Claude app, open the project and look at its folder, or:
 
 ```bash
-defaults read MobileMeAccounts Accounts | grep AccountID
+ls ~/Documents/Claude/Projects/
 ```
 
-**On the second Mac this matters less than it looks.** The engine and the skill bundles live
-*inside* the shared tree, so iCloud delivers them on its own. Over there you mainly need
-`mirror link` — and `mirror deploy` only if you want to bootstrap before iCloud has caught up.
-
-### Step 1 — move the project into the shared tree
-
-Run this **on the Mac that already has the project**:
+**5. Move the project into the shared tree.**
 
 ```bash
 ./bin/mirror migrate "Quicken Reconciliation"
+#   ✓ copied
+#   ✓ verified 17 files identical by md5
+#   ✓ linked   ~/Documents/Claude/Projects/… -> …/Claude/Projects/…
+#   ✓ original preserved at ~/Documents/Claude/Projects/.<Project>.pre-icloud-<timestamp>
 ```
 
-That copies `~/Documents/Claude/Projects/Quicken Reconciliation` into the iCloud tree, verifies every file by
-md5, and only then renames the original aside and leaves a symlink in its place. Your existing
-Cowork folder grant keeps working, because the path it points at is unchanged.
+It copies first, verifies every file by md5, and only then moves the original aside and leaves a
+symlink. **If verification fails nothing is moved.** The original is never deleted.
 
-The original is preserved as `.<Project>.pre-icloud-<timestamp>` and is never deleted. Keep it until
-you have confirmed Cowork still reads the project, then remove it yourself.
-
-If verification fails, nothing is moved and the command refuses to continue.
-
-### Step 2 — link it on the other Mac
-
-Wait for iCloud to carry the folder over — a minute or so if the Mac is awake — then:
-
-```bash
-./bin/mirror link "Quicken Reconciliation"
-```
-
-If a real (non-symlink) directory of that name already exists there, the command stops and tells
-you to move it aside yourself. It will not clobber project files.
-
-### Step 3 — point Cowork at it (once per machine)
-
-In the Claude desktop app on that Mac:
-
-1. Start a **new Cowork session**. The space from the other Mac will **not** be there — see the
-   table at the top. That is expected, not a failure.
-2. Grant it the folder `~/Documents/Claude/Projects/Quicken Reconciliation`.
-   If the sandbox refuses to follow the symlink, grant the iCloud path directly instead; it is
-   identical on both machines, so this is still a one-time step.
-3. Import `handoff.skill` and `pickup.skill` from `_handoff/` if they are not already in your
-   skills list. Custom skills usually sync on their own — check before importing.
-
-Both Macs can now see the same files. From here it is just the loop below.
-
-### If the folder name doesn't match the project name
-
-Cowork project names and folder names drift apart easily. The folder name is what appears in every
-`mirror` command, so a project called **Quicken Reconciliation** living in a folder named
-`Finances` will have you typing the wrong one every time. Align them:
+If the folder name is generic and you would rather it matched the project name, do it now, before
+there is any handoff history:
 
 ```bash
 ./bin/mirror rename "Finances" "Quicken Reconciliation"
 ```
 
-(That exact rename was done on 2026-08-19: folder, 9 events of ownership history, and both Macs'
-symlinks, with 17/17 files verified identical afterwards and no conflict copies.)
+**6. Re-grant the folder in Cowork on A.** Only needed if you renamed, or if the grant broke.
+Open the project in the Claude app and point it at `~/Documents/Claude/Projects/<Project>`.
 
-That renames the shared folder, moves its ownership history, and repoints this Mac's symlink.
-Two things it cannot do for you, and it prints both:
+**7. Confirm Cowork can still read the project** — open it and list a file. Once that works, delete
+the `.<Project>.pre-icloud-*` backup. Not before.
 
-1. **Re-grant the folder in Cowork on this Mac** — the old path no longer exists, so the existing
-   grant points at nothing.
-2. **On the other Mac**, delete the stale symlink and run `mirror link` with the new name.
+### Part 2 — on machine B
 
-Do this before you have much handoff history, and ideally while only one Mac is involved.
+**8. Wait for the drive to carry the folder over.** A minute or so if B is awake. Check from B:
+
+```bash
+ls ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/Projects/     # or your drive's path
+```
+
+If B has been asleep this can take several minutes. B must be **awake** — a sleeping laptop is
+indistinguishable from a broken drive.
+
+**9. Install on B.** Optional but recommended:
+
+```bash
+git clone https://github.com/altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
+cd ~/workspace/claude-macos-mirror
+./bin/mirror use-root "<B's path to the shared folder>"   # only if it differs from the default
+```
+
+You do **not** need `deploy` on B — the engine and skill bundles live inside the shared tree, so
+they arrive on their own.
+
+**10. Link the project on B.**
+
+```bash
+./bin/mirror link "Quicken Reconciliation"
+#   ✓ linked ~/Documents/Claude/Projects/… -> …/Claude/Projects/…
+```
+
+Without the repo on B, the same thing by hand:
+
+```bash
+ln -s ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/Projects/"Quicken Reconciliation" \
+      ~/Documents/Claude/Projects/"Quicken Reconciliation"
+```
+
+**11. Pull the file contents down and verify.**
+
+```bash
+./bin/mirror materialize ~/Documents/Claude/Projects/"Quicken Reconciliation"
+#   all files materialized          ← or "N dataless file(s) — forcing download"
+```
+
+This is not optional on iCloud. Files show correct names and sizes in `ls` while their contents are
+still in the cloud, and reading one returns empty **with no error**.
+
+**12. Set up Cowork on B.** In the Claude app on B:
+
+- Start a **new Cowork session**. The project from A will **not** appear — Cowork spaces are
+  device-local. That is expected; see the table at the top of this README.
+- Grant it `~/Documents/Claude/Projects/<Project>`.
+- Import `handoff.skill` and `pickup.skill` from the shared `_handoff/` folder if they are not
+  already in your skills list.
+
+### Part 3 — verify the mirror
+
+Run on **both** machines and compare:
+
+```bash
+./bin/mirror check       # shared root, engine version, projects, symlinks
+./bin/mirror status      # who owns what
+./bin/mirror conflicts   # must report nothing
+```
+
+To prove the files are genuinely identical rather than merely present:
+
+```bash
+cd ~/Documents/Claude/Projects/"Quicken Reconciliation" \
+  && find . -type f ! -name '.DS_Store' -exec md5 -q {} \; -print | paste - - | sort | md5
+```
+
+Same digest on both Macs means the mirror is real. Different means the drive has not finished
+syncing — wait, re-run `materialize`, and check `conflicts`.
+
+### Part 4 — from now on
+
+Setup is done and never repeats for this project. Day to day you only use the loop in the next
+section: `mirror handoff` when you leave a machine, `mirror pickup` when you arrive at one.
 
 ---
 

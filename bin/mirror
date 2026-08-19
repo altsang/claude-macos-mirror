@@ -2,10 +2,11 @@
 # mirror — manage Claude Cowork project mirroring between two Macs.
 #
 #   Setup verbs run from this repo. Runtime verbs are delegated to the versioned
-#   engine deployed in the iCloud tree (see bin/VERSIONING.md for why it is
+#   engine deployed in the shared tree (see bin/VERSIONING.md for why it is
 #   versioned rather than edited in place).
 #
-#   mirror deploy                    install/refresh tooling into the iCloud tree
+#   mirror use-root <path>           set the shared drive root for THIS Mac
+#   mirror deploy                    install/refresh tooling into the shared tree
 #   mirror migrate <Project>         move a local project INTO the shared tree
 #   mirror link <Project>            symlink an already-shared project on this Mac
 #   mirror rename <Old> <New>        rename a shared project everywhere
@@ -20,7 +21,16 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROOT="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude"
+CONF="$HOME/.config/claude-macos-mirror/root"
+default_root(){ echo "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude"; }
+resolve_root(){
+  if [ -n "${MIRROR_ROOT:-}" ]; then echo "$MIRROR_ROOT"
+  elif [ -f "$CONF" ]; then
+    local r; r="$(sed -e 's/[[:space:]]*$//' -e '/^$/d' "$CONF" | head -1)"
+    echo "${r/#\~/$HOME}"
+  else default_root; fi
+}
+ROOT="$(resolve_root)"
 PROJECTS="$ROOT/Projects"
 HANDOFF="$ROOT/_handoff"
 EVENTS="$HANDOFF/events"
@@ -39,9 +49,23 @@ engine(){
 # print the leading comment block, stopping at the first non-comment line
 usage(){ awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "${BASH_SOURCE[0]}"; }
 
+cmd_use_root(){
+  local path="${1:-}"; [ -n "$path" ] || die "usage: mirror use-root <path-to-shared-folder>"
+  path="${path/#\~/$HOME}"
+  local parent; parent="$(dirname "$path")"
+  [ -d "$parent" ] || die "parent does not exist: $parent
+     Make sure the shared drive is mounted and synced first."
+  mkdir -p "$(dirname "$CONF")"
+  printf '%s\n' "$path" > "$CONF"
+  ok "shared root for $ME set to: $path"
+  echo "  (stored in $CONF — this is per-machine, so the two Macs may differ)"
+}
+
 cmd_deploy(){
-  [ -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs" ] \
-    || die "iCloud Drive not available. Sign in to iCloud and enable Drive first."
+  local parent; parent="$(dirname "$ROOT")"
+  [ -d "$parent" ] \
+    || die "shared drive not available at: $parent
+     Mount/sync the drive, or point elsewhere:  mirror use-root <path>"
   mkdir -p "$PROJECTS" "$HANDOFF/bin"
   ok "tree ready: $ROOT"
   for f in "$HERE"/bin/coworkctl-v*.sh; do
@@ -64,13 +88,18 @@ cmd_deploy(){
   fi
   echo
   echo "Note: the engine and skill bundles live inside the shared tree, so the OTHER Mac"
-  echo "receives them through iCloud automatically. Over there you mainly need 'mirror link'."
+  echo "receives them through the shared drive automatically. Over there you mainly need"
+  echo "'mirror use-root' (if its path differs) and 'mirror link'."
 }
 
 cmd_check(){
   echo "machine: $ME"
-  echo "iCloud account: $(defaults read MobileMeAccounts Accounts 2>/dev/null | awk -F'"' '/AccountID/{print $2; exit}')"
-  [ -d "$ROOT" ] && ok "shared tree: $ROOT" || echo "  ✗ shared tree missing (iCloud not synced yet?)"
+  echo "shared root: $ROOT"
+  [ -f "$CONF" ] && echo "  (from $CONF)" || echo "  (default — no config set)"
+  case "$ROOT" in
+    *CloudDocs*) echo "iCloud account: $(defaults read MobileMeAccounts Accounts 2>/dev/null | awk -F'"' '/AccountID/{print $2; exit}')";;
+  esac
+  [ -d "$ROOT" ] && ok "shared tree present" || echo "  ✗ shared tree missing (drive not synced yet?)"
   local e; e="$(ls -1 "$HANDOFF"/bin/coworkctl-v*.sh 2>/dev/null | sort -V | tail -1)"
   # no `xargs basename` — the path contains spaces
   [ -n "$e" ] && ok "engine: $(basename "$e")" || echo "  ✗ engine not deployed"
@@ -166,6 +195,7 @@ cmd_rename(){
 }
 
 case "${1:-help}" in
+  use-root) shift; cmd_use_root "$@";;
   deploy)   shift; cmd_deploy "$@";;
   check)    shift; cmd_check "$@";;
   link)     shift; cmd_link "$@";;

@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Hand the current project's workload to the user's other Mac (Madoka <-> Ji-su). Use when the user says to hand off, move, send, or continue work on their other machine or laptop, or invokes /handoff by name. Writes a self-contained handoff document capturing everything the other machine needs, then transfers ownership of the shared folder. Use this instead of improvising a summary, because a local Cowork project cannot sync its chats and the receiving machine starts with no memory of this conversation.
+description: Hand the current project's workload to the user's other Mac (Madoka / Ji-su). Use when the user says to hand off, move, send, or continue work on their other machine or laptop, or invokes /handoff by name. Writes a self-contained handoff document capturing everything the other machine needs, then transfers ownership of the shared folder. Use this instead of improvising a summary, because a local Cowork project cannot sync its chats and the receiving machine starts with no memory of this conversation.
 ---
 
 # Hand off a workload to the other Mac
@@ -9,7 +9,7 @@ Al works across two Macs, **Madoka** (desktop) and **Ji-su** (laptop). Shared pr
 path identical on both:
 
 ```
-~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/<Project>
+~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/PROJECT
 ```
 
 Run everything through the `mirror` CLI:
@@ -19,7 +19,7 @@ MIRROR=~/workspace/claude-macos-mirror/bin/mirror
 ```
 
 If that path does not exist, fall back to the engine in the shared tree:
-`bash "$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v*.sh | sort -V | tail -1)"`.
+`bash "$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v5.sh | sort -V | tail -1)"`.
 
 ## Why this skill exists
 
@@ -36,11 +36,11 @@ genuinely ambiguous. `$MIRROR status` shows what is shared and who owns it.
 
 ## Step 2 — Write the handoff document
 
-Write `HANDOFF_<topic>.md` into the project folder. Assume a competent agent with zero context who
+Write `HANDOFF_TOPIC.md` into the project folder. Assume a competent agent with zero context who
 will act on it literally.
 
 ```markdown
-# HANDOFF — <one-line subject>
+# HANDOFF — one-line subject
 
 Paste this whole document as your first message in Cowork. It is self-contained.
 
@@ -76,7 +76,7 @@ What separates a good handoff from a useless one:
 ## Step 3 — Transfer
 
 ```bash
-$MIRROR handoff "<Project>" --to <Machine> --note "<one line>" [--wait]
+$MIRROR handoff "PROJECT" --to MACHINE --note "one line" [--wait]
 ```
 
 This materializes every file first — iCloud keeps files *dataless* (present in `ls`, contents still

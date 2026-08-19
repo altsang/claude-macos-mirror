@@ -1,6 +1,6 @@
 ---
 name: pickup
-description: Resume a workload handed over from the user's other Mac (Madoka <-> Ji-su). Use when the user says to pick up, resume, or continue work handed off from their other machine, or invokes /pickup by name. Claims the shared project, forces iCloud to download files that are present in name only, and loads the handoff document as working context before doing anything.
+description: Resume a workload handed over from the user's other Mac (Madoka / Ji-su). Use when the user says to pick up, resume, or continue work handed off from their other machine, or invokes /pickup by name. Claims the shared project, forces iCloud to download files that are present in name only, and loads the handoff document as working context before doing anything.
 ---
 
 # Pick up a workload from the other Mac
@@ -8,7 +8,7 @@ description: Resume a workload handed over from the user's other Mac (Madoka <->
 Counterpart to `/handoff`. Shared projects live at one path identical on both Macs:
 
 ```
-~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/<Project>
+~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/PROJECT
 ```
 
 ```bash
@@ -18,7 +18,7 @@ MIRROR=~/workspace/claude-macos-mirror/bin/mirror
 ## Step 1 — Claim and download
 
 ```bash
-$MIRROR pickup "<Project>"      # omit the name to resolve whichever is addressed to this Mac
+$MIRROR pickup "PROJECT"      # omit the name to resolve whichever is addressed to this Mac
 ```
 
 **Do not skip this and read files directly.** iCloud keeps evicted files *dataless*: correct name,
@@ -32,7 +32,7 @@ minute usually resolves it.
 
 ## Step 2 — Load the context
 
-The command prints `HANDOFF*.md`. Read it as your working brief, not as background. It was written
+The command prints `HANDOFF doc`. Read it as your working brief, not as background. It was written
 by a session with context you do not have — where it contradicts your assumptions, it wins.
 
 ## Step 3 — Verify prerequisites before acting
@@ -51,7 +51,7 @@ do first. Cheaper to catch a stale handoff now than after a wrong edit.
 
 Symptom: the folder appears connected but every read fails with *"is not inside a folder connected
 to Cowork on this device"*. Cause: the grant points at a **symlink**. Grant the real shared path
-instead — `$MIRROR path "<Project>"` prints it, and `$MIRROR check` flags projects in this state.
+instead — `$MIRROR path "PROJECT"` prints it, and `$MIRROR check` flags projects in this state.
 Finder cannot browse to `~/Library/Mobile Documents`; press ⌘⇧G in the picker and paste.
 
 Note also that **cloud** Cowork projects run in a bridged VM and could not reach `~/Library` at all.

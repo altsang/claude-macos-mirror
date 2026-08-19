@@ -78,8 +78,9 @@ cmd_check(){
   for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "      $(basename "$d")"; done
   echo "  local symlinks:"
   for l in "$HOME/Documents/Claude/Projects"/*; do
-    [ -L "$l" ] && echo "      $(basename "$l") -> $(readlink "$l")"
+    if [ -L "$l" ]; then echo "      $(basename "$l") -> $(readlink "$l")"; fi
   done
+  return 0   # a successful report must exit 0; the loop above can leave $? non-zero
 }
 
 cmd_link(){

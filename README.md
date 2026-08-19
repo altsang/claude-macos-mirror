@@ -138,7 +138,7 @@ a drive that wasn't syncing.
 **1. Clone and install.**
 
 ```bash
-git clone https://github.com/altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
+git clone git@github.com:altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
 cd ~/workspace/claude-macos-mirror
 ```
 
@@ -209,7 +209,7 @@ indistinguishable from a broken drive.
 **9. Install on B.** Optional but recommended:
 
 ```bash
-git clone https://github.com/altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
+git clone git@github.com:altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
 cd ~/workspace/claude-macos-mirror
 ./bin/mirror use-root "<B's path to the shared folder>"   # only if it differs from the default
 ```

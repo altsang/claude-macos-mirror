@@ -135,10 +135,16 @@ PY
   return 0   # a successful report must exit 0; the loop above can leave $? non-zero
 }
 
+# This command exists to hand you a string to paste into the Claude folder picker
+# (Add folder, then Cmd-Shift-G). So it copies to the clipboard as well as printing.
 cmd_path(){
   local name="${1:-}"; [ -n "$name" ] || die "usage: mirror path <Project>"
   [ -d "$PROJECTS/$name" ] || die "'$name' is not in the shared tree ($PROJECTS)"
   echo "$PROJECTS/$name"
+  if command -v pbcopy >/dev/null 2>&1; then
+    printf '%s' "$PROJECTS/$name" | pbcopy
+    echo "  (copied to clipboard — in the Claude app: Add folder, Cmd-Shift-G, paste, Return)" >&2
+  fi
 }
 
 # Kept only to explain itself. Creating the symlink is what broke folder grants.

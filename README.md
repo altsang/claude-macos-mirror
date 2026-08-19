@@ -117,19 +117,54 @@ If the folder name doesn't match the project name, fix it now, before there's an
 ./bin/mirror rename "Finances" "Quicken Reconciliation"
 ```
 
-Then, **on each Mac**, grant the folder in the Claude app:
+Then, **on each Mac**, grant the folder in the Claude app. This is the fiddliest step, so in full:
+
+**i. Get the exact path.** In a terminal:
 
 ```bash
-./bin/mirror path "Quicken Reconciliation"    # prints the exact path
+./bin/mirror path "Quicken Reconciliation"
 ```
 
-Claude app → open the project → **Add folder** → **⌘⇧G** → paste → approve the macOS prompt.
+It prints one line — the literal string you will paste. For example:
 
-> **Grant the real shared path, never a symlink.** Cowork registers a symlinked folder as connected
-> and then fails every read with *"is not inside a folder connected to Cowork on this device"* — the
-> UI shows it attached while nothing works. `./bin/mirror check` flags this and prints the fix.
-> ⌘⇧G is necessary because Finder won't browse to `~/Library/Mobile Documents`; it hides the folder
-> and relabels it "iCloud Drive".
+```
+/Users/altsang/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/Quicken Reconciliation
+```
+
+It is also **copied to your clipboard automatically**, so you can go straight to the picker. Same
+string on both Macs (only the username differs).
+
+**ii. Open the folder picker.** In the Claude app, open the project → **Add folder**. A standard
+macOS file picker appears.
+
+**iii. Press ⌘⇧G.** A small "Go to Folder" box drops down over the picker.
+
+**iv. Paste the path into that box and press Return.** Paste the entire line from step i:
+
+```
+/Users/altsang/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/Quicken Reconciliation
+```
+
+The picker jumps to that folder and shows its contents. Nothing to type by hand — if you find
+yourself typing, you are in the wrong box.
+
+**v. Confirm.** With that folder selected, click Open / Add, then approve the macOS permission
+prompt if one appears.
+
+**Why ⌘⇧G at all?** Because you cannot browse to it. Finder hides `~/Library`, and it relabels
+`Mobile Documents/com~apple~CloudDocs` as **"iCloud Drive"** — so the folder named "Mobile
+Documents" simply is not there to click. ⌘⇧G goes straight to a path regardless.
+
+If you would rather click: in the picker's sidebar choose **iCloud Drive**, then `Claude` →
+`Projects` → your project. That is the same folder by its display name.
+
+> **Grant this shared path — never a symlink.** Do not grant
+> `~/Documents/Claude/Projects/PROJECT` even if it exists and points at the right place. Cowork
+> registers a symlinked folder as connected — `get_device_info` reports it, the UI shows it
+> attached — and then fails **every** read inside it with *"is not inside a folder connected to
+> Cowork on this device"*. Because it looks fine, the error points nowhere near the cause. This is
+> why `migrate` no longer creates symlinks. `./bin/mirror check` flags any project in this state and
+> prints the repair command.
 
 Use the **`Local`**-badged project for file work. Cloud projects run their sessions in a bridged VM
 that can't reach these paths.

@@ -134,7 +134,58 @@ something is impossible, find the file that stores it first.
 Related: in session JSON, `title` is the **chat** name and `spaceId` points at the `spaces.json`
 entry. A project's real name is recorded only in `spaces.json`.
 
-## 8. Custom Cowork skills already sync
+## 8. A symlinked folder registers as connected, then fails every read
+
+**Never grant Cowork a symlinked folder.** Grant the real path.
+
+Symptom: `get_device_info` reports the folder as connected and the UI shows it attached, but every
+operation inside it fails with:
+
+> `... is not inside a folder connected to Cowork on this device`
+
+Listing fails, staging files fails, and the local shell mount comes up empty. Because the folder
+*looks* connected, the error points nowhere near the cause.
+
+Mechanism: the grant is registered against the symlink path. When Cowork resolves an actual file it
+gets the real path — here `~/Library/Mobile Documents/…` — compares that against the connected
+scope, finds it outside, and denies it.
+
+Verified 2026-08-19 on Ji-su. Same project, same files, same machine:
+
+| Granted path | Result |
+|---|---|
+| `~/Documents/Claude/Projects/<P>` (symlink) | registered, every read denied |
+| `~/Library/Mobile Documents/…/Projects/<P>` (real) | reads correctly |
+
+Confirmed with a random token in a canary file that could not be inferred from context.
+
+Consequences, all now built in:
+
+- `mirror migrate` no longer leaves a symlink behind; it prints the shared path to grant.
+- `mirror link` is deprecated, creates nothing, and explains this.
+- `mirror path <Project>` prints the exact path to paste.
+- `mirror check` flags any project whose granted folder is a symlink and prints the repath command.
+- `mirror project-repath <Project> <path>` fixes an existing one.
+
+Finder will not browse to `~/Library/Mobile Documents` — it is hidden, and Finder relabels
+`com~apple~CloudDocs` as "iCloud Drive". In the folder picker press **⌘⇧G** and paste the path.
+
+## 9. Cowork on a cloud project runs in a bridged VM with per-session folder access
+
+A Cowork session started from a **cloud** project runs in a cloud VM (`/home/claude`, Linux) with a
+bridge to the Mac — it reports the machine as e.g. `ji-su-local`. Two consequences:
+
+- **Folder access is per session, not per project.** A folder attached to the project does not
+  reach a conversation; each session needs its own grant. Its picker offered only Desktop,
+  Downloads, or a typed path.
+- Grants under `~/Library` did not succeed through the bridge in testing, whereas a **local**
+  Cowork session (the `Local`-badged kind) reads the same iCloud path without trouble — ten
+  sessions have run against `~/Library/Mobile Documents/…` folders successfully.
+
+So for file-heavy work, use a **local** project. Cloud projects are better when you want chats,
+instructions and memory to sync; local projects are what actually reach the disk.
+
+## 10. Custom Cowork skills already sync
 
 `skills-plugin/.../manifest.json` lists user-created skills with server-issued `skillId`s,
 `creatorType: "user"`, and server timestamps — it is an account-level manifest.

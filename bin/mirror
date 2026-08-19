@@ -8,7 +8,8 @@
 #   mirror use-root <path>           set the shared drive root for THIS Mac
 #   mirror deploy                    install/refresh tooling into the shared tree
 #   mirror migrate <Project>         move a local project INTO the shared tree
-#   mirror link <Project>            symlink an already-shared project on this Mac
+#   mirror path <Project>            print the folder path to grant in the Claude app
+#   mirror link <Project>            DEPRECATED — symlinks break Cowork folder grants
 #   mirror rename <Old> <New>        rename a shared project everywhere
 #
 #   mirror project-list              local projects defined on THIS Mac
@@ -110,27 +111,51 @@ cmd_check(){
   [ -n "$e" ] && ok "engine: $(basename "$e")" || echo "  ✗ engine not deployed"
   echo "  shared projects:"
   for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "      $(basename "$d")"; done
-  echo "  local symlinks:"
-  for l in "$HOME/Documents/Claude/Projects"/*; do
-    if [ -L "$l" ]; then echo "      $(basename "$l") -> $(readlink "$l")"; fi
-  done
+  echo "  projects whose granted folder is a SYMLINK (these will fail in Cowork):"
+  python3 - <<'PY'
+import json,glob,os
+fs=[x for x in glob.glob(os.path.expanduser(
+    "~/Library/Application Support/Claude/local-agent-mode-sessions/*/*/spaces.json"))
+    if "skills-plugin" not in x]
+bad=0
+for f in fs:
+    try: d=json.load(open(f))
+    except Exception: continue
+    for s in d.get("spaces",[]):
+        for x in s.get("folders") or []:
+            p=x.get("path","")
+            if os.path.islink(p):
+                bad+=1
+                print(f'      ✗ {s["name"]}')
+                print(f'          granted: {p}')
+                print(f'          real:    {os.path.realpath(p)}')
+                print(f'          fix: mirror project-repath "{s["name"]}" "{os.path.realpath(p)}"')
+if not bad: print("      none ✓")
+PY
   return 0   # a successful report must exit 0; the loop above can leave $? non-zero
 }
 
+cmd_path(){
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror path <Project>"
+  [ -d "$PROJECTS/$name" ] || die "'$name' is not in the shared tree ($PROJECTS)"
+  echo "$PROJECTS/$name"
+}
+
+# Kept only to explain itself. Creating the symlink is what broke folder grants.
 cmd_link(){
   local name="${1:-}"; [ -n "$name" ] || die "usage: mirror link <Project>"
   [ -d "$PROJECTS/$name" ] || die "'$name' is not in the shared tree ($PROJECTS)"
-  local dest="$HOME/Documents/Claude/Projects/$name"
-  mkdir -p "$HOME/Documents/Claude/Projects"
-  if [ -L "$dest" ]; then ok "already linked: $dest"
-  elif [ -e "$dest" ]; then
-    die "$dest exists and is NOT a symlink.
-     Move it aside yourself first:
-       mv \"$dest\" \"$dest.pre-icloud-\$(date +%Y%m%d-%H%M%S)\"
-     then re-run. Refusing to touch real project files."
-  else
-    ln -s "$PROJECTS/$name" "$dest"; ok "linked $dest -> $PROJECTS/$name"
-  fi
+  echo "mirror link is deprecated and creates nothing."
+  echo
+  echo "Cowork registers a symlinked folder as \"connected\" and then fails every read"
+  echo "inside it with \"is not inside a folder connected to Cowork on this device\","
+  echo "because the resolved real path falls outside the connected scope. The folder"
+  echo "looks fine in the UI, which makes it hard to diagnose. Verified 2026-08-19."
+  echo
+  echo "Grant this path in the Claude app instead (Add folder, then Cmd-Shift-G):"
+  echo "    $PROJECTS/$name"
+  echo
+  echo "It is the same path on both Macs, so there is nothing to link."
 }
 
 cmd_migrate(){
@@ -158,12 +183,18 @@ cmd_migrate(){
   ok "verified $(echo "$a" | grep -c .) files identical by md5"
   local bak="$HOME/Documents/Claude/Projects/.$name.pre-icloud-$(date +%Y%m%d-%H%M%S)"
   mv "$src" "$bak" || die "could not move original aside"
-  ln -s "$dst" "$src"
-  ok "linked $src -> $dst"
   ok "original preserved at $bak"
   echo
-  echo "  Keep that backup until Cowork has opened the migrated project."
-  echo "  On your OTHER Mac, once iCloud has carried it over:  mirror link \"$name\""
+  echo "  NO symlink is created, deliberately. Cowork registers a symlinked folder as"
+  echo "  \"connected\" but then refuses every read inside it, because the resolved real"
+  echo "  path is outside the connected scope. Verified 2026-08-19."
+  echo
+  echo "  In the Claude app, grant this project the folder below (Add folder, then"
+  echo "  Cmd-Shift-G to paste a path Finder will not browse to):"
+  echo "      $dst"
+  echo
+  echo "  That path is identical on both Macs. Keep the backup until Cowork reads the"
+  echo "  project successfully."
 }
 
 # Rename a shared project everywhere: the folder, its ownership history, and this
@@ -281,9 +312,9 @@ e.pop("_exported_from_paths",None)
 name=e["name"]
 if any(x.get("id")==e.get("id") or x.get("name")==name for x in d.get("spaces",[])):
     print(f'  "{name}" already exists on this Mac — nothing to do'); sys.exit(0)
-local=os.path.expanduser(f"~/Documents/Claude/Projects/{name}")
-shared=os.path.join(projects,name)
-path = local if os.path.exists(local) else (shared if os.path.exists(shared) else local)
+# always the shared path -- never ~/Documents, which is usually a symlink and
+# a symlinked grant registers as connected then fails every read.
+path = os.path.join(projects, name)
 e["folders"]=[{"path":path}]
 d.setdefault("spaces",[]).insert(0,e)
 json.dump(d,open(dst,"w"),indent=2)
@@ -321,6 +352,7 @@ case "${1:-help}" in
   deploy)   shift; cmd_deploy "$@";;
   check)    shift; cmd_check "$@";;
   link)     shift; cmd_link "$@";;
+  path)     shift; cmd_path "$@";;
   migrate)  shift; cmd_migrate "$@";;
   rename)   shift; cmd_rename "$@";;
   project-list)   shift; cmd_project_list "$@";;

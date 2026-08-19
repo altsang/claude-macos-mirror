@@ -20,7 +20,7 @@ This is the single most important thing in the repo, and getting it wrong wastes
 | **Projects with no local folder** ("cloud projects") | ✅ yes — server-side; web and every Mac |
 | **Projects with a local folder** (`Local` badge) | ⚠️ not automatically — but the definition **is** copyable, see below |
 | **Conversations inside a local project** | ❌ never. This is why the handoff document exists |
-| **Folder grants** (which dir a project may read) | ❌ no — per-machine |
+| **Folder grants** (which dir a project may read) | ❌ no — per-machine, and per-session for cloud projects |
 
 ### The rule: attaching a folder makes a project machine-bound
 
@@ -97,11 +97,11 @@ Runtime (in iCloud, identical path on every Mac):
     _handoff/{handoff,pickup}.skill  importable skill bundles
 ```
 
-Each Mac symlinks its local project path at the shared copy, so an existing Cowork folder grant
-keeps resolving:
+Both Macs grant Cowork **the shared path itself**. No symlinks — a symlinked folder registers as
+connected and then fails every read (see [docs/findings.md](docs/findings.md) #8):
 
 ```
-~/Documents/Claude/Projects/<Name> -> ~/Library/Mobile Documents/.../Claude/Projects/<Name>
+~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/<Name>
 ```
 
 This repo is the source of truth for the tooling. It lives **outside** iCloud on purpose — a `.git`
@@ -126,8 +126,9 @@ The tool defaults to iCloud. Trade-offs:
 | **Google Drive** | `~/Library/CloudStorage/GoogleDrive-<email>/My Drive/` | Path embeds the account email, so it can differ per machine — set it per machine with `use-root`. Check whether it is in "stream" mode, which makes files on-demand |
 | **Dropbox** | `~/Library/CloudStorage/Dropbox/` | Same path on both. Watch for selective-sync excluding the folder |
 
-The paths do **not** have to match across machines. The stable path is the symlink at
-`~/Documents/Claude/Projects/<Project>`, and the Cowork folder grant is per-machine anyway.
+The roots do **not** have to match across machines — the Cowork folder grant is per-machine, so
+each Mac can point at its own drive path. Matching paths are merely convenient: it means one
+copy-pasteable string works on both.
 
 Whatever you choose, confirm it is actually syncing between both Macs **before** you start — put a
 file in it on A and watch it appear on B. Every hard-to-debug failure in this system traces back to
@@ -179,8 +180,9 @@ ls ~/Documents/Claude/Projects/
 #   ✓ original preserved at ~/Documents/Claude/Projects/.<Project>.pre-icloud-<timestamp>
 ```
 
-It copies first, verifies every file by md5, and only then moves the original aside and leaves a
-symlink. **If verification fails nothing is moved.** The original is never deleted.
+It copies first, verifies every file by md5, and only then moves the original aside.
+**If verification fails nothing is moved.** The original is never deleted, and no symlink is
+created.
 
 If the folder name is generic and you would rather it matched the project name, do it now, before
 there is any handoff history:
@@ -189,8 +191,20 @@ there is any handoff history:
 ./bin/mirror rename "Finances" "Quicken Reconciliation"
 ```
 
-**6. Re-grant the folder in Cowork on A.** Only needed if you renamed, or if the grant broke.
-Open the project in the Claude app and point it at `~/Documents/Claude/Projects/<Project>`.
+**6. Grant the shared path in Cowork on A.** Open the project in the Claude app, Add folder, and
+give it the **shared-tree path** — not the old `~/Documents/...` one:
+
+```bash
+./bin/mirror path "Quicken Reconciliation"    # prints the exact path to paste
+```
+
+Finder cannot browse to `~/Library/Mobile Documents` — it is hidden, and Finder relabels
+`com~apple~CloudDocs` as "iCloud Drive". In the picker press **⌘⇧G** and paste the path.
+
+**Never grant a symlink.** Cowork registers a symlinked folder as connected and then fails every
+read inside it with *"is not inside a folder connected to Cowork on this device"* — the UI shows it
+attached while nothing works. `./bin/mirror check` flags any project in this state and prints the
+repath command.
 
 **7. Confirm Cowork can still read the project** — open it and list a file. Once that works, delete
 the `.<Project>.pre-icloud-*` backup. Not before.
@@ -217,24 +231,17 @@ cd ~/workspace/claude-macos-mirror
 You do **not** need `deploy` on B — the engine and skill bundles live inside the shared tree, so
 they arrive on their own.
 
-**10. Link the project on B.**
+**10. Nothing to link.** The shared path is identical on both Macs, so B needs no symlink and no
+local copy — just the path to grant:
 
 ```bash
-./bin/mirror link "Quicken Reconciliation"
-#   ✓ linked ~/Documents/Claude/Projects/… -> …/Claude/Projects/…
-```
-
-Without the repo on B, the same thing by hand:
-
-```bash
-ln -s ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/Projects/"Quicken Reconciliation" \
-      ~/Documents/Claude/Projects/"Quicken Reconciliation"
+./bin/mirror path "Quicken Reconciliation"
 ```
 
 **11. Pull the file contents down and verify.**
 
 ```bash
-./bin/mirror materialize ~/Documents/Claude/Projects/"Quicken Reconciliation"
+./bin/mirror materialize "$(./bin/mirror path 'Quicken Reconciliation')"
 #   all files materialized          ← or "N dataless file(s) — forcing download"
 ```
 
@@ -257,7 +264,7 @@ folder):
 See *Copying a local project* below for what travels and what does not.
 
 *Option B — recreate it by hand.* In the Claude app on B, make a new project, give it the same
-name and instructions, and attach `~/Documents/Claude/Projects/<Project>`.
+name and instructions, and attach the shared path from `mirror path <Project>`.
 
 Either way, import `handoff.skill` and `pickup.skill` from the shared `_handoff/` folder if they
 are not already in your skills list.
@@ -286,9 +293,8 @@ paths — those are per-machine.
 ./bin/mirror project-import "Quicken Reconciliation"
 ```
 
-It backs up `spaces.json`, splices the entry in, and points `folders[]` at this machine's
-`~/Documents/Claude/Projects/<Name>` (falling back to the shared tree path if the symlink is not
-there yet). Relaunch Claude and the project appears — same name, same instructions, wired to the
+It backs up `spaces.json`, splices the entry in, and points `folders[]` at the shared-tree path on
+this machine. Relaunch Claude and the project appears — same name, same instructions, wired to the
 mirrored folder.
 
 `project-import` refuses to run while Claude is open, because a live app rewrites `spaces.json`
@@ -310,7 +316,7 @@ Both write a timestamped `spaces.json.bak-*` before touching anything.
 Run on **both** machines and compare:
 
 ```bash
-./bin/mirror check       # shared root, engine version, projects, symlinks
+./bin/mirror check       # shared root, engine version, projects, symlink problems
 ./bin/mirror status      # who owns what
 ./bin/mirror conflicts   # must report nothing
 ```

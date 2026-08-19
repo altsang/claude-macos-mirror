@@ -1,442 +1,249 @@
 # claude-macos-mirror
 
-Move a Claude **Cowork** workload between two Macs — here, `Madoka` (desktop) and `Ji-su` (laptop).
+Move a Claude **Cowork** workload between two Macs — here `Madoka` (desktop) and `Ji-su` (laptop).
 
-Shared project files live at one path that is byte-identical on both machines, synced by iCloud
-Drive. A small tool tracks which Mac currently owns a project, forces iCloud to actually deliver
-file contents, and carries a handoff document that lets a session on the other machine pick the
-work up cold.
+Project files live in one shared-drive folder both machines can reach. A small CLI sets that up and
+verifies it; two skills (`/handoff`, `/pickup`) do the day-to-day transfer from inside a Cowork
+session.
 
 ---
 
-## Read this first — what does and does not move
+## The problem
 
-This is the single most important thing in the repo, and getting it wrong wastes hours.
+Cowork projects appear on every machine — but the moment you attach a **local folder** to one, it
+becomes machine-bound:
 
-| Thing | Moves between Macs? |
+- the project is written into *that Mac's* `spaces.json`, gets a `Local` badge, and is invisible on
+  the web and on your other Mac
+- **chat is not available for local Cowork projects**, so there is no synced conversation history
+  and no project memory to fall back on
+- the folder itself is only on that machine's disk
+
+So if you're reconciling accounts on the desktop and want to continue on the laptop, three separate
+things have to travel: the **files**, the **project definition**, and — hardest — the **context**
+of what you were doing and why.
+
+There is no native path for the third one. A cloud project *does* sync chats and memory, but its
+Cowork sessions run in a bridged VM that couldn't reach `~/Library` in testing, so it can't touch
+your files. **File access and synced context are mutually exclusive today.** That gap is what this
+repo fills.
+
+## What actually syncs
+
+Worth internalising before anything else — getting this wrong wastes hours.
+
+| Thing | Crosses machines? |
 |---|---|
-| **Project files** on disk | ✅ yes — that is what this repo does |
-| **Custom Cowork skills** | ✅ yes — automatically, at the account level. Never copy them by hand |
-| **Projects with no local folder** ("cloud projects") | ✅ yes — server-side; web and every Mac |
-| **Projects with a local folder** (`Local` badge) | ⚠️ not automatically — but the definition **is** copyable, see below |
-| **Conversations inside a local project** | ❌ never. This is why the handoff document exists |
-| **Folder grants** (which dir a project may read) | ❌ no — per-machine, and per-session for cloud projects |
+| Files in a shared-drive folder | ✅ the drive does this — no tooling needed |
+| Custom Cowork skills | ✅ automatically, at the account level. Never copy them by hand |
+| Cloud projects, their chats, instructions, memory | ✅ server-side |
+| **Projects with a local folder** (`Local` badge) | ⚠️ definition is copyable; nothing automatic |
+| **Conversations in a local project** | ❌ never — this is why the handoff document exists |
+| Folder grants | ❌ per-machine, and per-session for cloud projects |
 
-### The rule: attaching a folder makes a project machine-bound
+## What this repo does — and doesn't
 
-A Claude project lives in one of two places, and the deciding factor is whether you have attached a
-local folder to it:
+**It does not sync your files.** iCloud (or Google Drive, or Dropbox) does that. What this adds:
 
-- **No folder attached** → the project lives on the server. It appears on claude.ai and on every
-  Mac, automatically.
-- **A folder attached** → the project is written into *that Mac's* `spaces.json`, gets the `Local`
-  badge in the UI, and is invisible on the web and on your other Mac.
-
-That is the whole explanation for "some projects are only on this Mac, some only on that one, and
-some are everywhere." Counted on one setup: 8 cloud projects visible in all three places, 11 local
-to one Mac, 2 local to the other. The local counts match `spaces.json` on each machine exactly.
-
-### Where local projects live
-
-```
-~/Library/Application Support/Claude/local-agent-mode-sessions/<account-uuid>/<org-uuid>/spaces.json
-```
-
-A plain JSON file. Each entry is the entire project definition:
-
-```json
-{ "spaces": [
-  { "id": "a8bf01fc-…",
-    "name": "Quicken Reconciliation",
-    "folders": [ { "path": "/Users/you/Documents/Claude/Projects/Quicken Reconciliation" } ],
-    "projects": [], "links": [],
-    "instructions": "I use Quicken and …",
-    "createdAt": 1775931264418, "updatedAt": 1776300860934 } ] }
-```
-
-Two consequences worth knowing:
-
-**A local project can be copied to the other Mac.** It is a JSON object — name, instructions,
-folder paths. Add the entry to the other machine's `spaces.json`, rewrite `folders[].path` for that
-machine, and the project appears there with the same name and instructions, pointed at the mirrored
-folder. See *Copying a local project* below.
-
-**The `Local` badge reads straight from this file.** The UI shows the folder name next to the badge
-only when an entry has exactly one folder; entries with several show a bare `Local` badge. Useful
-sanity check when reconciling what you see against what is on disk.
-
-**Edit it only while Claude is quit.** A running app will rewrite the file from memory and discard
-your change. `mirror project-import` and `project-repath` enforce this; they refuse to run while
-the app is open.
-
-### What still does not travel
-
-The **conversations** inside a local project. Copying the definition gives you the project shell,
-its instructions and its folder wiring — not its chat history. So moving a workload is still:
-
-> the **files** are already there, the **project definition** can be copied, and a **handoff
-> document** brings a fresh conversation up to speed.
-
-That document remains the load-bearing part.
-
-Related trap: in the local session JSON, `title` is the **chat** name and `spaceId` points at the
-entry in `spaces.json`. Don't infer a project name from a folder name or a chat title — check
-`spaces.json`, which is the only local place a project's real name is recorded.
+- a **migration** that moves a project into the shared tree and md5-verifies every file before
+  touching the original
+- an **ownership log** so both Macs know which one holds a project, preventing the conflict copies
+  that two machines editing one synced folder produce
+- **materialization** — forcing the drive to deliver file *contents*, not just names
+- a **handoff document** workflow, the only mechanism that carries context to a machine whose
+  project cannot sync its chats
+- **diagnostics** for the failure modes that are silent and confusing, chiefly symlinked folder
+  grants
 
 ---
 
-## Layout
+## Install
 
-Runtime (in iCloud, identical path on every Mac):
-
-```
-~/Library/Mobile Documents/com~apple~CloudDocs/Claude/
-    Projects/<Name>/                 shared project files
-    _handoff/bin/coworkctl-v4.sh     the tool
-    _handoff/events/<Name>/*.json    append-only ownership log
-    _handoff/{handoff,pickup}.skill  importable skill bundles
-```
-
-Both Macs grant Cowork **the shared path itself**. No symlinks — a symlinked folder registers as
-connected and then fails every read (see [docs/findings.md](docs/findings.md) #8):
-
-```
-~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/<Name>
-```
-
-This repo is the source of truth for the tooling. It lives **outside** iCloud on purpose — a `.git`
-directory inside a synced folder is precisely the conflict-copy hazard described in
-[docs/findings.md](docs/findings.md).
-
----
-
-## Runbook — mirror a project to another machine, start to finish
-
-Machine **A** is the Mac that already has the project. Machine **B** is the one you want to move
-work to. Every command is copy-pasteable; expected output is shown where it matters.
-
-### Part 0 — pick the shared drive (once, ever)
-
-Any folder that syncs between the two Macs works: **iCloud Drive**, **Google Drive**, **Dropbox**.
-The tool defaults to iCloud. Trade-offs:
-
-| Drive | Path | Notes |
-|---|---|---|
-| **iCloud Drive** (default) | `~/Library/Mobile Documents/com~apple~CloudDocs/` | Same path on any Mac regardless of Apple ID. Files go *dataless* when evicted — handled by `pickup` |
-| **Google Drive** | `~/Library/CloudStorage/GoogleDrive-<email>/My Drive/` | Path embeds the account email, so it can differ per machine — set it per machine with `use-root`. Check whether it is in "stream" mode, which makes files on-demand |
-| **Dropbox** | `~/Library/CloudStorage/Dropbox/` | Same path on both. Watch for selective-sync excluding the folder |
-
-The roots do **not** have to match across machines — the Cowork folder grant is per-machine, so
-each Mac can point at its own drive path. Matching paths are merely convenient: it means one
-copy-pasteable string works on both.
-
-Whatever you choose, confirm it is actually syncing between both Macs **before** you start — put a
-file in it on A and watch it appear on B. Every hard-to-debug failure in this system traces back to
-a drive that wasn't syncing.
-
-### Part 1 — on machine A (has the project)
-
-**1. Clone and install.**
+### 1. Once per machine
 
 ```bash
 git clone git@github.com:altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
 cd ~/workspace/claude-macos-mirror
+./bin/mirror deploy
 ```
 
-**2. If you are NOT using iCloud, point it at your drive.**
+Defaults to iCloud Drive. For another drive:
 
 ```bash
 ./bin/mirror use-root "~/Library/CloudStorage/GoogleDrive-you@gmail.com/My Drive/Claude"
 ```
 
-Skip this for iCloud. Verify either way:
+Roots need not match across machines — grants are per-machine anyway — but matching paths mean one
+copy-pasteable string works on both.
 
 ```bash
-./bin/mirror check
-#   shared root: …/Claude
-#   ✓ shared tree present     ← if this is ✗, the drive is not synced yet. Stop and fix that.
+./bin/mirror check      # ✓ shared tree present   ← if ✗, the drive hasn't synced yet. Fix that first.
 ```
 
-**3. Deploy the tooling into the shared tree.**
+Both Macs must be signed into the **same account** on the drive:
+`defaults read MobileMeAccounts Accounts | grep AccountID`
 
-```bash
-./bin/mirror deploy
+On the second machine `deploy` is optional — the engine and skill bundles live *inside* the shared
+tree, so the drive delivers them.
+
+### 2. Once, for the skills
+
+Claude app → **Settings → Skills → Add**, and upload:
+
+```
+skills/handoff/SKILL.md
+skills/pickup/SKILL.md
 ```
 
-**4. Find the project's folder name.** This is the folder Cowork granted, *not* the project title —
-they are often different. In the Claude app, open the project and look at its folder, or:
+Import on one Mac only; skills sync at the account level. `/handoff` and `/pickup` become available
+in Cowork.
+
+### 3. Once per project
+
+On the Mac that already has the project:
 
 ```bash
-ls ~/Documents/Claude/Projects/
-```
-
-**5. Move the project into the shared tree.**
-
-```bash
+ls ~/Documents/Claude/Projects/          # find the folder name — often NOT the project name
 ./bin/mirror migrate "Quicken Reconciliation"
-#   ✓ copied
-#   ✓ verified 17 files identical by md5
-#   ✓ linked   ~/Documents/Claude/Projects/… -> …/Claude/Projects/…
-#   ✓ original preserved at ~/Documents/Claude/Projects/.<Project>.pre-icloud-<timestamp>
 ```
 
-It copies first, verifies every file by md5, and only then moves the original aside.
-**If verification fails nothing is moved.** The original is never deleted, and no symlink is
-created.
+It copies into the shared tree, verifies every file by md5, then moves the original aside as
+`.PROJECT.pre-icloud-TIMESTAMP`. Nothing is moved if verification fails, and the original is never
+deleted. **No symlink is created** — see below.
 
-If the folder name is generic and you would rather it matched the project name, do it now, before
-there is any handoff history:
+If the folder name doesn't match the project name, fix it now, before there's any history:
 
 ```bash
 ./bin/mirror rename "Finances" "Quicken Reconciliation"
 ```
 
-**6. Grant the shared path in Cowork on A.** Open the project in the Claude app, Add folder, and
-give it the **shared-tree path** — not the old `~/Documents/...` one:
+Then, **on each Mac**, grant the folder in the Claude app:
 
 ```bash
-./bin/mirror path "Quicken Reconciliation"    # prints the exact path to paste
+./bin/mirror path "Quicken Reconciliation"    # prints the exact path
 ```
 
-Finder cannot browse to `~/Library/Mobile Documents` — it is hidden, and Finder relabels
-`com~apple~CloudDocs` as "iCloud Drive". In the picker press **⌘⇧G** and paste the path.
+Claude app → open the project → **Add folder** → **⌘⇧G** → paste → approve the macOS prompt.
 
-**Never grant a symlink.** Cowork registers a symlinked folder as connected and then fails every
-read inside it with *"is not inside a folder connected to Cowork on this device"* — the UI shows it
-attached while nothing works. `./bin/mirror check` flags any project in this state and prints the
-repath command.
+> **Grant the real shared path, never a symlink.** Cowork registers a symlinked folder as connected
+> and then fails every read with *"is not inside a folder connected to Cowork on this device"* — the
+> UI shows it attached while nothing works. `./bin/mirror check` flags this and prints the fix.
+> ⌘⇧G is necessary because Finder won't browse to `~/Library/Mobile Documents`; it hides the folder
+> and relabels it "iCloud Drive".
 
-**7. Confirm Cowork can still read the project** — open it and list a file. Once that works, delete
-the `.<Project>.pre-icloud-*` backup. Not before.
+Use the **`Local`**-badged project for file work. Cloud projects run their sessions in a bridged VM
+that can't reach these paths.
 
-### Part 2 — on machine B
-
-**8. Wait for the drive to carry the folder over.** A minute or so if B is awake. Check from B:
+To put the project on the second Mac, copy its definition:
 
 ```bash
-ls ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/Projects/     # or your drive's path
+./bin/mirror project-export "Quicken Reconciliation"   # on A — writes into the shared tree
+./bin/mirror project-import "Quicken Reconciliation"   # on B, with Claude QUIT
 ```
 
-If B has been asleep this can take several minutes. B must be **awake** — a sleeping laptop is
-indistinguishable from a broken drive.
+Carries name, instructions and id; not the chat history. Editing `spaces.json` while Claude runs is
+pointless — the app rewrites it from memory on exit.
 
-**9. Install on B.** Optional but recommended:
+### Verify
 
 ```bash
-git clone git@github.com:altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
-cd ~/workspace/claude-macos-mirror
-./bin/mirror use-root "<B's path to the shared folder>"   # only if it differs from the default
+./bin/mirror check        # shared root, engine, symlinked grants
+./bin/mirror status       # who owns what
+./bin/mirror conflicts    # must report nothing
 ```
 
-You do **not** need `deploy` on B — the engine and skill bundles live inside the shared tree, so
-they arrive on their own.
-
-**10. Nothing to link.** The shared path is identical on both Macs, so B needs no symlink and no
-local copy — just the path to grant:
+Same digest on both Macs means the mirror is real, not merely present:
 
 ```bash
-./bin/mirror path "Quicken Reconciliation"
+cd "$(./bin/mirror path 'Quicken Reconciliation')" \
+  && find . -type f ! -name '.DS_Store' ! -path './.handoff/*' -exec md5 -q {} \; -print \
+  | paste - - | sort | md5
 ```
-
-**11. Pull the file contents down and verify.**
-
-```bash
-./bin/mirror materialize "$(./bin/mirror path 'Quicken Reconciliation')"
-#   all files materialized          ← or "N dataless file(s) — forcing download"
-```
-
-This is not optional on iCloud. Files show correct names and sizes in `ls` while their contents are
-still in the cloud, and reading one returns empty **with no error**.
-
-**12. Get the project onto B.** It will **not** appear on its own — a project with a folder
-attached is machine-bound. Two ways, and the first is usually what you want.
-
-*Option A — copy the project definition* (same name, same instructions, already wired to the
-folder):
-
-```bash
-# on A
-./bin/mirror project-export "Quicken Reconciliation"
-# on B, with Claude quit
-./bin/mirror project-import "Quicken Reconciliation"
-```
-
-See *Copying a local project* below for what travels and what does not.
-
-*Option B — recreate it by hand.* In the Claude app on B, make a new project, give it the same
-name and instructions, and attach the shared path from `mirror path <Project>`.
-
-Either way, import `handoff.skill` and `pickup.skill` from the shared `_handoff/` folder if they
-are not already in your skills list.
-
-Note that **the conversations do not come across** with either option. That is what the handoff
-document is for.
-
-### Copying a local project to the other Mac
-
-A local project is a JSON entry, so it can be copied. The definition travels through the shared
-drive — no SSH, and it works even if the other Mac is off right now.
-
-**On A** (the Mac that has the project):
-
-```bash
-./bin/mirror project-list                              # see what is local to this Mac
-./bin/mirror project-export "Quicken Reconciliation"   # writes _handoff/projects/<Name>.json
-```
-
-The export carries the project's **name, instructions and id**, and deliberately drops the folder
-paths — those are per-machine.
-
-**On B**, once the drive has carried it over and **Claude is quit**:
-
-```bash
-./bin/mirror project-import "Quicken Reconciliation"
-```
-
-It backs up `spaces.json`, splices the entry in, and points `folders[]` at the shared-tree path on
-this machine. Relaunch Claude and the project appears — same name, same instructions, wired to the
-mirrored folder.
-
-`project-import` refuses to run while Claude is open, because a live app rewrites `spaces.json`
-from memory and would silently discard the change. `project-export` is read-only and safe any time.
-
-**Its chat history will be empty.** That does not travel and never will — run `mirror pickup` to
-load the handoff document into a fresh conversation.
-
-To repoint a project at a different folder — after a rename, say:
-
-```bash
-./bin/mirror project-repath "Quicken Reconciliation" ~/Documents/Claude/Projects/"Quicken Reconciliation"
-```
-
-Both write a timestamped `spaces.json.bak-*` before touching anything.
-
-### Part 3 — verify the mirror
-
-Run on **both** machines and compare:
-
-```bash
-./bin/mirror check       # shared root, engine version, projects, symlink problems
-./bin/mirror status      # who owns what
-./bin/mirror conflicts   # must report nothing
-```
-
-To prove the files are genuinely identical rather than merely present:
-
-```bash
-cd ~/Documents/Claude/Projects/"Quicken Reconciliation" \
-  && find . -type f ! -name '.DS_Store' -exec md5 -q {} \; -print | paste - - | sort | md5
-```
-
-Same digest on both Macs means the mirror is real. Different means the drive has not finished
-syncing — wait, re-run `materialize`, and check `conflicts`.
-
-### Part 4 — from now on
-
-Setup is done and never repeats for this project. Day to day you only use the loop in the next
-section: `mirror handoff` when you leave a machine, `mirror pickup` when you arrive at one.
 
 ---
 
-## Going back and forth
+## Run
 
-This is the part you do repeatedly. **On the Mac you are leaving:**
+Day to day you use the skills, in a Cowork session in the `Local` project. No terminal.
 
-```bash
-mirror handoff "Quicken Reconciliation" --to Ji-su --note "6 securities remain"
-```
-
-Before running it, write or refresh `HANDOFF_<topic>.md` in the project folder. The `/handoff`
-skill does this for you and it is the part that actually matters — the other machine gets your
-files automatically but knows nothing about your conversation.
-
-Then stop editing the project on this Mac.
-
-**On the Mac you are moving to:**
-
-```bash
-mirror pickup "Quicken Reconciliation"
-```
-
-This forces iCloud to deliver real file contents, claims ownership, and prints the handoff
-document. Start a **new Cowork session** there, grant it the shared folder if you have not already,
-and give it that document as its first message.
-
-**Coming back** is the same two commands with the machines reversed. The ownership log accumulates,
-so `log` shows the whole history:
-
-```bash
-mirror status          # who owns what, from this machine
-mirror log "Quicken Reconciliation"   # full ownership history
-mirror conflicts       # report iCloud conflict copies (reports only, never deletes)
-mirror materialize <p> # force-download a path
-```
-
-`mirror` is one entry point for everything. Setup verbs (`deploy`, `migrate`, `link`, `rename`,
-`check`) run from this repo; runtime verbs (`status`, `handoff`, `pickup`, `log`, `conflicts`,
-`materialize`) are passed through to the versioned engine in the iCloud tree, so you never have to
-resolve a version yourself. Put `bin/` on your PATH, or call it as `./bin/mirror`.
-
-On a Mac without this repo cloned, call the engine directly:
-
-```bash
-bash "$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v*.sh | sort -V | tail -1)" status
-```
-
-### What the loop looks like in practice
+**Leaving a machine:**
 
 ```
-Madoka                                    Ji-su
-------                                    -----
-/handoff  ──── writes HANDOFF_x.md ───▶
-          ──── files + event via iCloud ─▶
-                                          /pickup
-                                          (new Cowork session, grant folder,
-                                           paste the handoff doc, do the work)
-          ◀─── files + event via iCloud ── /handoff
+/handoff
+```
+
+Refreshes `HANDOFF_TOPIC.md` in the project folder, reads every file to force the drive to deliver
+its contents, and records an ownership event at `PROJECT/.handoff/events/`.
+
+**Arriving at the other machine:**
+
+```
 /pickup
 ```
 
-Nothing about the *project* moves. The files and the brief move, and each machine runs its own
-Cowork session over the same folder.
+Reads every file (verifying nothing came through empty), checks the ownership log, claims the
+project, and loads the handoff document as its working brief.
 
-## Expectations that will save you confusion
+Then start a **new** Cowork session there and give it that document. The project's conversations do
+not travel — that's the whole reason the document exists.
 
-**This is not synchronous.** iCloud carries a handoff in ~30s when the receiving Mac is awake and
-enumerating, and minutes when it has been asleep. `handoff` **stages** work; only `pickup` on the
-far side proves it arrived. Never read a successful `handoff` as "it's there."
+### Expectations
 
-**A sleeping laptop looks exactly like broken sync.** Ji-su defaults to sleeping after one minute
-idle. Before diagnosing anything, check `ssh <peer> uptime` and `pmset -g ps`.
+**It is not synchronous.** ~30s at best; minutes if the receiving Mac has been asleep. `/handoff`
+**stages**; only `/pickup` proves arrival.
 
-**One machine edits at a time.** That is what the ownership log is for. Two Macs editing one synced
-folder is how you get `(conflicted copy)` files, and reconciling those by hand in a financial
-dataset is miserable.
+**One machine edits at a time.** That's what the ownership log is for.
 
-**Never commit project data.** `.gitignore` blocks the obvious extensions, but the real rule is that
-this repo holds tooling and documentation only. The Quicken files contain account numbers and
-cost-basis figures.
+**The document is the deliverable.** Files arrive on their own. Everything you knew and didn't write
+down is lost at the handoff. Put the numbers in it.
 
----
+### From a terminal
 
-## Why there is no fast path
+The CLI covers what a sandboxed session cannot — cross-project ownership, and repair:
 
-A direct rsync-over-SSH transport was built and measured at **0.95s with every file md5-verified**,
-in both directions. It was then removed on purpose.
+```bash
+./bin/mirror status                    # every project, who owns it
+./bin/mirror log "Quicken Reconciliation"
+./bin/mirror handoff "PROJECT" --to MACHINE --note "..."   # terminal equivalent of /handoff
+./bin/mirror pickup "PROJECT"
+./bin/mirror materialize "$(./bin/mirror path 'PROJECT')"
+```
 
-Writing into an iCloud-synced folder means two writers for one path — iCloud delivering its copy
-while rsync delivers the same bytes. FileProvider forks them rather than reconciling, and real
-conflict copies appeared on both Macs (`events 2`, `peers 2.conf`, `coworkctl-v3 2.sh`, and a
-duplicated `.qif`). Speed is not worth a financial dataset quietly growing forked copies.
-
-If you want that speed back, the correct shape is to move the shared tree **out** of iCloud
-entirely and let rsync be the only writer — not to add rsync back alongside iCloud.
+A Cowork session's shell is an isolated Linux VM that sees **only** its granted project folder — not
+`~/workspace`, not the shared `_handoff/` tree. That's why the skills use plain file writes and why
+per-project state lives in `PROJECT/.handoff/`.
 
 ---
 
-## Further reading
+## Layout
 
-- [docs/findings.md](docs/findings.md) — measured iCloud behaviour, and the traps that cost real
-  time: dataless files, in-place modifications that never propagate, enumeration latency, openrsync
-  quoting, and two destructive commands to avoid.
-- [bin/VERSIONING.md](bin/VERSIONING.md) — why the tool filename carries a version number.
+```
+~/Library/Mobile Documents/com~apple~CloudDocs/Claude/
+    Projects/PROJECT/                     shared files  ← grant THIS path
+    Projects/PROJECT/.handoff/events/     append-only ownership log
+    _handoff/bin/coworkctl-v6.sh          engine (versioned — never edited in place)
+    _handoff/projects/PROJECT.json        exported project definitions
+    _handoff/{handoff,pickup}.skill       importable skill bundles
+```
+
+Releases are new files, never edits: the drive does not reliably propagate an in-place modification
+of a file the other Mac has already read. Callers resolve `coworkctl-v*.sh | sort -V | tail -1`.
+This repo lives **outside** the shared drive — a `.git` directory in a synced folder is the same
+two-writer hazard that produces conflict copies.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| *"is not inside a folder connected to Cowork"*, folder looks attached | grant points at a **symlink** | `mirror check`, then `mirror project-repath PROJECT "$(mirror path PROJECT)"` with Claude quit |
+| A file reads empty, no error | evicted/dataless — contents still in the cloud | read it again; `mirror materialize`. `du` and `.icloud` checks cannot see this |
+| Nothing arrives on the other Mac | it's asleep, or you didn't enumerate | `ssh peer 'uptime; pmset -g ps'`; list the whole parent chain, not just the leaf |
+| `(name) 2.ext` files appearing | two writers to one synced path | `mirror conflicts` (reports only), remove by exact path — **never** by glob |
+| `/handoff` says it can't reach the CLI | old skill version registered | re-upload `skills/*/SKILL.md`; current versions need no CLI |
+| Skill upload rejected, "cannot have XML tags" | angle-bracket placeholders in `SKILL.md` | use bare words, not `<Project>` |
+| Project missing on the other Mac | local projects don't sync | `mirror project-export` / `project-import` |
+
+[docs/findings.md](docs/findings.md) has the measurements behind each of these, and the two commands
+that destroyed data during development.

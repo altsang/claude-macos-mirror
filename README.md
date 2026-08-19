@@ -71,7 +71,7 @@ Do this once per project. After that you only ever run `handoff` and `pickup`.
 ```bash
 git clone https://github.com/altsang/claude-macos-mirror.git ~/workspace/claude-macos-mirror
 cd ~/workspace/claude-macos-mirror
-./install.sh
+./bin/mirror deploy
 ```
 
 Both Macs must be signed in to the **same Apple ID** in iCloud Drive. Check with:
@@ -80,12 +80,16 @@ Both Macs must be signed in to the **same Apple ID** in iCloud Drive. Check with
 defaults read MobileMeAccounts Accounts | grep AccountID
 ```
 
+**On the second Mac this matters less than it looks.** The engine and the skill bundles live
+*inside* the shared tree, so iCloud delivers them on its own. Over there you mainly need
+`mirror link` — and `mirror deploy` only if you want to bootstrap before iCloud has caught up.
+
 ### Step 1 — move the project into the shared tree
 
 Run this **on the Mac that already has the project**:
 
 ```bash
-./install.sh --migrate "Finances"
+./bin/mirror migrate "Finances"
 ```
 
 That copies `~/Documents/Claude/Projects/Finances` into the iCloud tree, verifies every file by
@@ -102,7 +106,7 @@ If verification fails, nothing is moved and the command refuses to continue.
 Wait for iCloud to carry the folder over — a minute or so if the Mac is awake — then:
 
 ```bash
-./install.sh --link "Finances"
+./bin/mirror link "Finances"
 ```
 
 If a real (non-symlink) directory of that name already exists there, the command stops and tells
@@ -122,21 +126,33 @@ In the Claude desktop app on that Mac:
 
 Both Macs can now see the same files. From here it is just the loop below.
 
+### If the folder name doesn't match the project name
+
+Cowork project names and folder names drift apart easily — a project called
+**Quicken Reconciliation** whose folder is `Finances` will have you typing the wrong one
+every time. The folder name is what appears in every `mirror` command, so it is worth aligning:
+
+```bash
+./bin/mirror rename "Finances" "Quicken Reconciliation"
+```
+
+That renames the shared folder, moves its ownership history, and repoints this Mac's symlink.
+Two things it cannot do for you, and it prints both:
+
+1. **Re-grant the folder in Cowork on this Mac** — the old path no longer exists, so the existing
+   grant points at nothing.
+2. **On the other Mac**, delete the stale symlink and run `mirror link` with the new name.
+
+Do this before you have much handoff history, and ideally while only one Mac is involved.
+
 ---
 
 ## Going back and forth
 
-This is the part you do repeatedly. Resolve the newest tool version rather than hardcoding one —
-releases are new files, never edits:
+This is the part you do repeatedly. **On the Mac you are leaving:**
 
 ```bash
-COWORKCTL="$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v*.sh | sort -V | tail -1)"
-```
-
-**On the Mac you are leaving:**
-
-```bash
-bash "$COWORKCTL" handoff Finances --to Ji-su --note "6 securities remain"
+mirror handoff Finances --to Ji-su --note "6 securities remain"
 ```
 
 Before running it, write or refresh `HANDOFF_<topic>.md` in the project folder. The `/handoff`
@@ -148,7 +164,7 @@ Then stop editing the project on this Mac.
 **On the Mac you are moving to:**
 
 ```bash
-bash "$COWORKCTL" pickup Finances
+mirror pickup Finances
 ```
 
 This forces iCloud to deliver real file contents, claims ownership, and prints the handoff
@@ -159,10 +175,21 @@ and give it that document as its first message.
 so `log` shows the whole history:
 
 ```bash
-bash "$COWORKCTL" status          # who owns what, from this machine
-bash "$COWORKCTL" log Finances    # full ownership history
-bash "$COWORKCTL" conflicts       # report iCloud conflict copies (reports only, never deletes)
-bash "$COWORKCTL" materialize <p> # force-download a path
+mirror status          # who owns what, from this machine
+mirror log Finances    # full ownership history
+mirror conflicts       # report iCloud conflict copies (reports only, never deletes)
+mirror materialize <p> # force-download a path
+```
+
+`mirror` is one entry point for everything. Setup verbs (`deploy`, `migrate`, `link`, `rename`,
+`check`) run from this repo; runtime verbs (`status`, `handoff`, `pickup`, `log`, `conflicts`,
+`materialize`) are passed through to the versioned engine in the iCloud tree, so you never have to
+resolve a version yourself. Put `bin/` on your PATH, or call it as `./bin/mirror`.
+
+On a Mac without this repo cloned, call the engine directly:
+
+```bash
+bash "$(ls -1 ~/Library/Mobile\ Documents/com~apple~CloudDocs/Claude/_handoff/bin/coworkctl-v*.sh | sort -V | tail -1)" status
 ```
 
 ### What the loop looks like in practice

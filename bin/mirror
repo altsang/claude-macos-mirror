@@ -1,0 +1,177 @@
+#!/bin/bash
+# mirror — manage Claude Cowork project mirroring between two Macs.
+#
+#   Setup verbs run from this repo. Runtime verbs are delegated to the versioned
+#   engine deployed in the iCloud tree (see bin/VERSIONING.md for why it is
+#   versioned rather than edited in place).
+#
+#   mirror deploy                    install/refresh tooling into the iCloud tree
+#   mirror migrate <Project>         move a local project INTO the shared tree
+#   mirror link <Project>            symlink an already-shared project on this Mac
+#   mirror rename <Old> <New>        rename a shared project everywhere
+#   mirror check                     report state, change nothing
+#
+#   mirror status                    who owns what
+#   mirror handoff <Project> --to <Machine> [--note ...] [--wait]
+#   mirror pickup [Project]
+#   mirror log <Project>
+#   mirror conflicts
+#   mirror materialize [path]
+
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude"
+PROJECTS="$ROOT/Projects"
+HANDOFF="$ROOT/_handoff"
+EVENTS="$HANDOFF/events"
+ME="$(scutil --get ComputerName 2>/dev/null || hostname)"
+
+die(){ echo "error: $*" >&2; exit 1; }
+ok(){ echo "  ✓ $*"; }
+
+engine(){
+  local e
+  e="$(ls -1 "$HANDOFF"/bin/coworkctl-v*.sh 2>/dev/null | sort -V | tail -1)"
+  [ -n "$e" ] || die "no engine deployed yet — run: mirror deploy"
+  echo "$e"
+}
+
+# print the leading comment block, stopping at the first non-comment line
+usage(){ awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "${BASH_SOURCE[0]}"; }
+
+cmd_deploy(){
+  [ -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs" ] \
+    || die "iCloud Drive not available. Sign in to iCloud and enable Drive first."
+  mkdir -p "$PROJECTS" "$HANDOFF/bin"
+  ok "tree ready: $ROOT"
+  for f in "$HERE"/bin/coworkctl-v*.sh; do
+    [ -f "$f" ] || continue
+    cp "$f" "$HANDOFF/bin/$(basename "$f")"; chmod +x "$HANDOFF/bin/$(basename "$f")"
+    ok "deployed $(basename "$f")"
+  done
+  [ -f "$HERE/bin/VERSIONING.md" ] && cp "$HERE/bin/VERSIONING.md" "$HANDOFF/bin/README.md" && ok "deployed bin/README.md"
+  if command -v zip >/dev/null 2>&1; then
+    local tmp; tmp="$(mktemp -d)"
+    for k in handoff pickup; do
+      [ -f "$HERE/skills/$k/SKILL.md" ] || continue
+      mkdir -p "$tmp/$k"; cp -R "$HERE/skills/$k/." "$tmp/$k/"
+      (cd "$tmp" && rm -f "$HANDOFF/$k.skill" && zip -q -D -r "$HANDOFF/$k.skill" "$k" -x '.*')
+      ok "packaged $k.skill"
+    done
+    rm -rf "$tmp"
+  else
+    echo "  ! zip not found — skill bundles not packaged"
+  fi
+  echo
+  echo "Note: the engine and skill bundles live inside the shared tree, so the OTHER Mac"
+  echo "receives them through iCloud automatically. Over there you mainly need 'mirror link'."
+}
+
+cmd_check(){
+  echo "machine: $ME"
+  echo "iCloud account: $(defaults read MobileMeAccounts Accounts 2>/dev/null | awk -F'"' '/AccountID/{print $2; exit}')"
+  [ -d "$ROOT" ] && ok "shared tree: $ROOT" || echo "  ✗ shared tree missing (iCloud not synced yet?)"
+  local e; e="$(ls -1 "$HANDOFF"/bin/coworkctl-v*.sh 2>/dev/null | sort -V | tail -1)"
+  # no `xargs basename` — the path contains spaces
+  [ -n "$e" ] && ok "engine: $(basename "$e")" || echo "  ✗ engine not deployed"
+  echo "  shared projects:"
+  for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "      $(basename "$d")"; done
+  echo "  local symlinks:"
+  for l in "$HOME/Documents/Claude/Projects"/*; do
+    [ -L "$l" ] && echo "      $(basename "$l") -> $(readlink "$l")"
+  done
+}
+
+cmd_link(){
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror link <Project>"
+  [ -d "$PROJECTS/$name" ] || die "'$name' is not in the shared tree ($PROJECTS)"
+  local dest="$HOME/Documents/Claude/Projects/$name"
+  mkdir -p "$HOME/Documents/Claude/Projects"
+  if [ -L "$dest" ]; then ok "already linked: $dest"
+  elif [ -e "$dest" ]; then
+    die "$dest exists and is NOT a symlink.
+     Move it aside yourself first:
+       mv \"$dest\" \"$dest.pre-icloud-\$(date +%Y%m%d-%H%M%S)\"
+     then re-run. Refusing to touch real project files."
+  else
+    ln -s "$PROJECTS/$name" "$dest"; ok "linked $dest -> $PROJECTS/$name"
+  fi
+}
+
+cmd_migrate(){
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror migrate <Project>"
+  local src="$HOME/Documents/Claude/Projects/$name"
+  local dst="$PROJECTS/$name"
+  [ -e "$src" ] || die "no such project: $src"
+  [ -L "$src" ] && { ok "'$name' is already a symlink into the shared tree"; return 0; }
+  [ -d "$src" ] || die "$src is not a directory"
+  [ -e "$dst" ] && die "'$name' already exists in the shared tree.
+     To link this Mac to it instead: mirror link \"$name\""
+
+  echo "migrating '$name' into the shared tree"
+  mkdir -p "$dst"
+  rsync -a --exclude '.DS_Store' "$src/" "$dst/" || die "copy failed"
+  ok "copied"
+  local a b
+  a="$(cd "$src" && find . -type f ! -name '.DS_Store' -exec md5 -q {} \; -print | paste - - | sort)"
+  b="$(cd "$dst" && find . -type f ! -name '.DS_Store' -exec md5 -q {} \; -print | paste - - | sort)"
+  if [ "$a" != "$b" ]; then
+    echo "VERIFICATION FAILED — nothing moved." >&2
+    diff <(echo "$a") <(echo "$b") | head -20 >&2
+    die "refusing to move the original"
+  fi
+  ok "verified $(echo "$a" | grep -c .) files identical by md5"
+  local bak="$HOME/Documents/Claude/Projects/.$name.pre-icloud-$(date +%Y%m%d-%H%M%S)"
+  mv "$src" "$bak" || die "could not move original aside"
+  ln -s "$dst" "$src"
+  ok "linked $src -> $dst"
+  ok "original preserved at $bak"
+  echo
+  echo "  Keep that backup until Cowork has opened the migrated project."
+  echo "  On your OTHER Mac, once iCloud has carried it over:  mirror link \"$name\""
+}
+
+# Rename a shared project everywhere: the folder, its ownership history, and this
+# Mac's symlink. Useful when the folder name does not match the Cowork project name.
+cmd_rename(){
+  local old="${1:-}" new="${2:-}"
+  [ -n "$old" ] && [ -n "$new" ] || die "usage: mirror rename <Old> <New>"
+  [ -d "$PROJECTS/$old" ] || die "'$old' is not in the shared tree"
+  [ -e "$PROJECTS/$new" ] && die "'$new' already exists in the shared tree"
+
+  echo "renaming shared project: '$old' -> '$new'"
+  mv "$PROJECTS/$old" "$PROJECTS/$new" || die "rename failed"
+  ok "folder renamed"
+
+  if [ -d "$EVENTS/$old" ]; then
+    if [ -e "$EVENTS/$new" ]; then
+      echo "  ! events/$new already exists — leaving events/$old in place"
+    else
+      mv "$EVENTS/$old" "$EVENTS/$new"; ok "ownership history moved"
+    fi
+  fi
+
+  local link="$HOME/Documents/Claude/Projects/$old"
+  if [ -L "$link" ]; then rm "$link"; ok "removed stale symlink $link"; fi
+  cmd_link "$new"
+
+  echo
+  echo "  IMPORTANT — two follow-ups:"
+  echo "   1. In Cowork on THIS Mac, re-grant the project folder. The old path is gone,"
+  echo "      so the existing grant now points at nothing."
+  echo "   2. On your OTHER Mac, once iCloud catches up:"
+  echo "         rm ~/Documents/Claude/Projects/\"$old\"     # stale symlink"
+  echo "         mirror link \"$new\""
+}
+
+case "${1:-help}" in
+  deploy)   shift; cmd_deploy "$@";;
+  check)    shift; cmd_check "$@";;
+  link)     shift; cmd_link "$@";;
+  migrate)  shift; cmd_migrate "$@";;
+  rename)   shift; cmd_rename "$@";;
+  status|handoff|pickup|log|conflicts|materialize)
+            e="$(engine)" || exit 1; exec bash "$e" "$@";;
+  help|-h|--help) usage;;
+  *) echo "unknown command: $1" >&2; echo; usage; exit 1;;
+esac

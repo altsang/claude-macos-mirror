@@ -322,16 +322,24 @@ out=dict(e)
 # folder paths are per-machine; the importer sets its own
 out["folders"]=[]
 out["_exported_from_paths"]=[p.get("path") for p in (e.get("folders") or [])]
-dest=os.path.join(outdir,f"{name}.json")
+# NEW file each time, never an overwrite: the drive does not reliably propagate an
+# in-place modification of a file the other Mac has already read. Same reason the
+# engine filename carries a version and the event log is append-only.
+import datetime
+ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+dest=os.path.join(outdir,f"{name}.{ts}.json")
 json.dump(out,open(dest,"w"),indent=2)
-print(f'  exported "{name}" -> _handoff/projects/{name}.json')
+print(f'  exported "{name}" -> _handoff/projects/{name}.{ts}.json')
 print(f'  instructions: {"yes" if e.get("instructions") else "none"}')
 PY
   # a manifest of the project's files, so the receiving Mac can show real progress
   # and verify on arrival rather than guessing when the drive is "done"
-  python3 - "$PROJECTS/$1" "$HANDOFF/projects/$1.manifest.json" "$1" <<'PY'
+  python3 - "$PROJECTS/$1" "$HANDOFF/projects" "$1" <<'PY'
 import os,sys,json,hashlib
-root,dest,name=sys.argv[1],sys.argv[2],sys.argv[3]
+import datetime
+root,outdir,name=sys.argv[1],sys.argv[2],sys.argv[3]
+ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+dest=os.path.join(outdir,f"{name}.{ts}.manifest.json")
 files=[]
 for dp,_,fn in os.walk(root):
     if ".handoff" in dp.split(os.sep): continue
@@ -353,12 +361,15 @@ PY
 cmd_project_import(){
   require_claude_quit
   local name="${1:-}"; [ -n "$name" ] || die "usage: mirror project-import <Name> [--wait]"
-  local src="$HANDOFF/projects/$name.json"
+  local src
+  src="$(ls -1 "$HANDOFF/projects/$name."*.json 2>/dev/null | grep -v '\.manifest\.json$' | sort | tail -1)"
+  [ -n "$src" ] || src="$HANDOFF/projects/$name.json"   # pre-timestamp layout
   if [ "${2:-}" = "--wait" ] && [ ! -f "$src" ]; then
     echo "waiting for the definition to arrive from the other Mac..."
     for i in $(seq 1 100); do
       ls "$HANDOFF" >/dev/null 2>&1; ls "$HANDOFF/projects" >/dev/null 2>&1
-      [ -f "$src" ] && { echo "  arrived after ~$((i*6))s"; break; }
+      src="$(ls -1 "$HANDOFF/projects/$name."*.json 2>/dev/null | grep -v '\.manifest\.json$' | sort | tail -1)"
+      [ -n "$src" ] && [ -f "$src" ] && { echo "  arrived after ~$((i*6))s"; break; }
       printf "\r  %ds" $((i*6)); sleep 6
     done
     echo
@@ -420,7 +431,9 @@ cmd_wait(){
     case "$1" in --timeout) timeout="$2"; shift 2;; *) shift;; esac
   done
   [ -n "$name" ] || die "usage: mirror wait <Project> [--timeout SECONDS]"
-  local man="$HANDOFF/projects/$name.manifest.json"
+  local man
+  man="$(ls -1 "$HANDOFF/projects/$name."*.manifest.json 2>/dev/null | sort | tail -1)"
+  [ -n "$man" ] || man="$HANDOFF/projects/$name.manifest.json"   # pre-timestamp layout
   python3 - "$PROJECTS" "$name" "$man" "$timeout" "$HANDOFF" <<'PY'
 import os,sys,json,time,hashlib
 projects,name,man,timeout,handoff=sys.argv[1],sys.argv[2],sys.argv[3],int(sys.argv[4]),sys.argv[5]

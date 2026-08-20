@@ -14,7 +14,8 @@
 #
 #   mirror project-list              local projects defined on THIS Mac
 #   mirror project-export <Name>     write a project definition into the shared tree
-#   mirror project-import <Name>     add an exported definition to THIS Mac
+#   mirror project-import <Name>     add an exported definition to THIS Mac (--wait to block)
+#   mirror wait <Name>               watch the drive deliver a project, with progress
 #   mirror project-repath <Name> <p> repoint a project's folder
 #   mirror check                     report state, change nothing
 #
@@ -111,7 +112,7 @@ cmd_check(){
   [ -n "$e" ] && ok "engine: $(basename "$e")" || echo "  ✗ engine not deployed"
   echo "  shared projects:"
   for d in "$PROJECTS"/*/; do [ -d "$d" ] && echo "      $(basename "$d")"; done
-  echo "  projects whose granted folder is a SYMLINK (these will fail in Cowork):"
+  echo "  granted folders that will fail in Cowork:"
   python3 - <<'PY'
 import json,glob,os
 fs=[x for x in glob.glob(os.path.expanduser(
@@ -126,10 +127,21 @@ for f in fs:
             p=x.get("path","")
             if os.path.islink(p):
                 bad+=1
-                print(f'      ✗ {s["name"]}')
+                print(f'      ✗ {s["name"]} — granted folder is a SYMLINK')
                 print(f'          granted: {p}')
                 print(f'          real:    {os.path.realpath(p)}')
                 print(f'          fix: mirror project-repath "{s["name"]}" "{os.path.realpath(p)}"')
+            elif not os.path.exists(p):
+                bad+=1
+                shared=os.path.expanduser(
+                    "~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/"+s["name"])
+                print(f'      ✗ {s["name"]} — granted folder DOES NOT EXIST')
+                print(f'          granted: {p}')
+                if os.path.isdir(shared):
+                    print(f'          shared copy is at: {shared}')
+                    print(f'          fix: mirror project-repath "{s["name"]}" "{shared}"')
+                else:
+                    print(f'          no shared copy found — was it migrated?')
 if not bad: print("      none ✓")
 PY
   return 0   # a successful report must exit 0; the loop above can leave $? non-zero
@@ -299,13 +311,42 @@ json.dump(out,open(dest,"w"),indent=2)
 print(f'  exported "{name}" -> _handoff/projects/{name}.json')
 print(f'  instructions: {"yes" if e.get("instructions") else "none"}')
 PY
+  # a manifest of the project's files, so the receiving Mac can show real progress
+  # and verify on arrival rather than guessing when the drive is "done"
+  python3 - "$PROJECTS/$1" "$HANDOFF/projects/$1.manifest.json" "$1" <<'PY'
+import os,sys,json,hashlib
+root,dest,name=sys.argv[1],sys.argv[2],sys.argv[3]
+files=[]
+for dp,_,fn in os.walk(root):
+    if ".handoff" in dp.split(os.sep): continue
+    for f in fn:
+        if f==".DS_Store": continue
+        fp=os.path.join(dp,f); rel=os.path.relpath(fp,root)
+        try:
+            h=hashlib.md5(open(fp,"rb").read()).hexdigest()
+            files.append({"path":rel,"size":os.path.getsize(fp),"md5":h})
+        except OSError: pass
+json.dump({"project":name,"files":files,
+           "count":len(files),"bytes":sum(f["size"] for f in files)},
+          open(dest,"w"),indent=2)
+print(f'  manifest: {len(files)} files, {sum(f["size"] for f in files)/1000:.1f} KB')
+PY
   echo "  The other Mac picks it up with:  mirror project-import \"$name\""
 }
 
 cmd_project_import(){
   require_claude_quit
-  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror project-import <Name>"
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror project-import <Name> [--wait]"
   local src="$HANDOFF/projects/$name.json"
+  if [ "${2:-}" = "--wait" ] && [ ! -f "$src" ]; then
+    echo "waiting for the definition to arrive from the other Mac..."
+    for i in $(seq 1 100); do
+      ls "$HANDOFF" >/dev/null 2>&1; ls "$HANDOFF/projects" >/dev/null 2>&1
+      [ -f "$src" ] && { echo "  arrived after ~$((i*6))s"; break; }
+      printf "\r  %ds" $((i*6)); sleep 6
+    done
+    echo
+  fi
   [ -f "$src" ] || die "no exported definition at $src
      Run 'mirror project-export \"$name\"' on the other Mac first, and give the drive time to sync."
   local f; f="$(spaces_file)" || die "no spaces.json on this Mac (open Cowork once to create it)"
@@ -353,6 +394,87 @@ PY
   echo "  Relaunch Claude for it to take effect."
 }
 
+# Watch the shared drive deliver a project, with progress. Entirely local -- it polls
+# this Mac's own disk. The parent-chain enumeration matters: iCloud does not push to
+# an idle Mac, and listing only the leaf directory will not surface new files.
+cmd_wait(){
+  local name="${1:-}" timeout=600
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in --timeout) timeout="$2"; shift 2;; *) shift;; esac
+  done
+  [ -n "$name" ] || die "usage: mirror wait <Project> [--timeout SECONDS]"
+  local man="$HANDOFF/projects/$name.manifest.json"
+  python3 - "$PROJECTS" "$name" "$man" "$timeout" "$HANDOFF" <<'PY'
+import os,sys,json,time,hashlib
+projects,name,man,timeout,handoff=sys.argv[1],sys.argv[2],sys.argv[3],int(sys.argv[4]),sys.argv[5]
+root=os.path.join(projects,name)
+
+def enumerate_chain():
+    # touching each level is what makes the drive surface new entries
+    for d in (handoff,os.path.join(handoff,"projects"),projects,root,
+              os.path.join(root,".handoff"),os.path.join(root,".handoff","events")):
+        try: os.listdir(d)
+        except OSError: pass
+
+def present():
+    out={}
+    for dp,_,fn in os.walk(root):
+        if ".handoff" in dp.split(os.sep): continue
+        for f in fn:
+            if f==".DS_Store": continue
+            fp=os.path.join(dp,f)
+            try: st=os.stat(fp)
+            except OSError: continue
+            # dataless = present in the listing but no content yet
+            out[os.path.relpath(fp,root)]=(st.st_size, st.st_blocks>0)
+    return out
+
+expected=None
+if os.path.exists(man):
+    try: expected=json.load(open(man))
+    except Exception: pass
+
+start=time.time(); last=""
+while time.time()-start<timeout:
+    enumerate_chain()
+    p=present()
+    have=len(p); mat=sum(1 for v in p.values() if v[1]); byts=sum(v[0] for v in p.values())
+    el=int(time.time()-start)
+    if expected:
+        n=expected["count"]; tb=expected["bytes"]
+        pct=int(100*mat/n) if n else 100
+        bar="█"*(pct//5)+"░"*(20-pct//5)
+        line=f"  [{bar}] {pct:3d}%  {mat}/{n} files materialized, {byts/1000:.0f}/{tb/1000:.0f} KB   {el}s"
+    else:
+        line=f"  {have} files present, {mat} materialized, {byts/1000:.0f} KB   {el}s"
+    if line!=last: print("\r"+line,end="",flush=True); last=line
+    if expected and mat>=expected["count"]:
+        print()
+        bad=[]
+        for f in expected["files"]:
+            fp=os.path.join(root,f["path"])
+            try:
+                if hashlib.md5(open(fp,"rb").read()).hexdigest()!=f["md5"]: bad.append(f["path"])
+            except OSError: bad.append(f["path"])
+        if bad:
+            print(f"  {len(bad)} file(s) differ from the manifest:")
+            for b in bad[:5]: print(f"      {b}")
+            sys.exit(1)
+        print(f'  ✓ all {expected["count"]} files delivered and verified by md5 in {el}s')
+        sys.exit(0)
+    # no manifest: settle for two quiet rounds
+    if not expected and have and mat==have:
+        time.sleep(6); enumerate_chain()
+        if len(present())==have:
+            print(f"\n  ✓ {have} files present and materialized ({el}s); no manifest, so unverified")
+            sys.exit(0)
+    time.sleep(3)
+print(f"\n  timed out after {timeout}s — the other Mac may be asleep, or the drive is still working")
+sys.exit(1)
+PY
+}
+
 case "${1:-help}" in
   use-root) shift; cmd_use_root "$@";;
   deploy)   shift; cmd_deploy "$@";;
@@ -365,6 +487,7 @@ case "${1:-help}" in
   project-export) shift; cmd_project_export "$@";;
   project-import) shift; cmd_project_import "$@";;
   project-repath) shift; cmd_project_repath "$@";;
+  wait)           shift; cmd_wait "$@";;
   status|handoff|pickup|log|conflicts|materialize)
             e="$(engine)" || exit 1; exec bash "$e" "$@";;
   help|-h|--help) usage;;

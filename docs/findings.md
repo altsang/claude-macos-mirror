@@ -310,6 +310,52 @@ the wrong process: after a handoff that folder is exactly where iCloud must writ
 changes. Mode bits may also propagate. Locking the project definition touches no file and leaves
 sync untouched.
 
+## 12c. Local projects DO have memory — on one Mac, in Application Support
+
+An earlier version of these notes said a local project has "no project memory to fall back on."
+That is wrong, and it mattered: it made the handoff document look like the only possible carrier of
+context when in fact a large, structured one already exists on disk.
+
+```
+~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/
+    spaces/<spaceId>/memory/
+        MEMORY.md                    index — one line per memory
+        project_*.md  feedback_*.md  reference_*.md  user_*.md
+```
+
+Surveyed 2026-08-20 on Madoka:
+
+| Project | Files | Bytes |
+|---|---|---|
+| K-Culture Tracker | 44 | 410,431 |
+| Quicken Reconciliation | 20 | 42,696 |
+| Adobe Stock Plan | 12 | 31,047 |
+| Portfolio Management | 7 | 12,055 |
+| Remodel Addition Project Tracker | 6 | 13,399 |
+
+The content is not incidental. Quicken's holds reconciliation status with dollar figures
+(`GS Vintage VII … LP=133,501 DPV=-2,009.89`), workflow corrections (`SPAXX is cash, never a
+security`), and tool gotchas (`type fails under Parallels; use single key presses`).
+
+Note this is a **different mechanism** from the cloud-project cache at
+`.project-cache/<uuid>/memory.md`, which is a single synced file. The local store is a directory of
+files keyed by the `spaces.json` project id.
+
+Two consequences:
+
+- **The docs' premise needs narrowing.** Conversations genuinely never cross. Memory exists but is
+  per-machine, so the receiving Mac still starts blank — the handoff document remains load-bearing.
+  But "there is no memory" was overstated.
+- **It is copyable in principle.** `project-export`/`import` preserve the project `id`, so the
+  destination path is deterministic on the other Mac. Carrying `spaces/<id>/memory/` with a handoff
+  would give the receiving session everything the sending one learned, not just the topic summary
+  someone remembered to write down. Observed 2026-08-20: Adobe Stock Plan had 31 KB of memory on
+  Madoka and none on Ji-su, and the handoff document said so in its own words — "the sending
+  machine had project memory for this work; Ji-su does not, so everything needed is below."
+
+Not implemented. Merging two divergent stores is the hard part, and overwriting a machine's
+accumulated memory is destructive in a way file transfer is not.
+
 ## 13. Cowork on a cloud project runs in a bridged VM with per-session folder access
 
 A Cowork session started from a **cloud** project runs in a cloud VM (`/home/claude`, Linux) with a

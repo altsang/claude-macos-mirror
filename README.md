@@ -17,7 +17,8 @@ becomes machine-bound:
 - the project is written into *that Mac's* `spaces.json`, gets a `Local` badge, and is invisible on
   the web and on your other Mac
 - **chat is not available for local Cowork projects**, so there is no synced conversation history
-  and no project memory to fall back on
+- the project *does* accumulate memory, but it lives in Application Support on that one Mac and
+  never crosses — the other machine starts blank
 - the folder itself is only on that machine's disk
 
 So if you're reconciling accounts on the desktop and want to continue on the laptop, three separate
@@ -28,6 +29,10 @@ There is no native path for the third one. A cloud project *does* sync chats and
 Cowork sessions run in a bridged VM that couldn't reach `~/Library` in testing, so it can't touch
 your files. **File access and synced context are mutually exclusive today.** That gap is what this
 repo fills.
+
+A local project builds real memory as you work — `Quicken Reconciliation` holds 20 files and 42 KB
+of it — but it sits in `Application Support` on the machine that learned it. The receiving Mac gets
+none of it, which is why the handoff document has to restate what matters.
 
 ## What actually syncs
 
@@ -40,6 +45,7 @@ Worth internalising before anything else — getting this wrong wastes hours.
 | Cloud projects, their chats, instructions, memory | ✅ server-side |
 | **Projects with a local folder** (`Local` badge) | ⚠️ definition is copyable; nothing automatic |
 | **Conversations in a local project** | ❌ never — this is why the handoff document exists |
+| **A local project's accumulated memory** | ❌ per-machine, on local disk — real, sizeable, and copyable in principle (finding 12c) |
 | Folder links (which folder a project reads) | ❌ per-machine — but `mirror` writes them; cloud projects re-grant per session |
 
 ## What this repo does — and doesn't

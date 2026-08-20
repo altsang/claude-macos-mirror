@@ -27,6 +27,11 @@
 #                                    project's instructions (send --hold does both)
 #   mirror release <Project>         undo that (receive does it automatically)
 #
+#   mirror memory-snapshot <Name>    copy this Mac's project memory into the shared tree
+#                                    (send does this automatically)
+#   mirror memory-install <Name>     install the newest snapshot into THIS Mac's store
+#                                    (receive does it; --force replaces, with a backup)
+#
 #   mirror project-list              local projects defined on THIS Mac
 #   mirror project-export <Name>     write a project definition into the shared tree
 #   mirror project-import <Name>     add an exported definition to THIS Mac
@@ -299,6 +304,139 @@ cmd_rename(){
   echo "        mirror project-repath \"$new\" \"$PROJECTS/$new\""
   echo "        rm ~/Documents/Claude/Projects/\"$old\"     # only if a stale symlink is there"
   echo "  Ownership history follows the rename; 'mirror log \"$new\"' should show it."
+}
+
+# ---- project memory ---------------------------------------------------------
+#
+# A local project accumulates real memory at spaces/<spaceId>/memory/ next to
+# spaces.json (finding 12c) -- per-machine, and keyed by the project id that
+# export/import preserve. Memory follows ownership, like the files: send
+# snapshots the holder's store into the project's .handoff/memory/, receive
+# installs it on the other Mac. An existing store is never overwritten silently.
+
+space_id(){        # project name -> id, from THIS Mac's spaces.json
+  local f; f="$(spaces_file)" || return 1
+  python3 - "$f" "$1" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+e=next((x for x in d.get("spaces",[]) if x.get("name")==sys.argv[2]),None)
+if e is None: sys.exit(1)
+print(e["id"])
+PY
+}
+
+memory_dir(){      # project name -> this Mac's memory store path (may not exist yet)
+  local f sid; f="$(spaces_file)" || return 1
+  sid="$(space_id "$1")" || return 1
+  echo "$(dirname "$f")/spaces/$sid/memory"
+}
+
+cmd_memory_snapshot(){
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror memory-snapshot <Project>"
+  [ -d "$PROJECTS/$name" ] || die "'$name' is not in the shared tree"
+  local src
+  if ! src="$(memory_dir "$name")"; then
+    echo "  no project definition on this Mac — no memory to snapshot"; return 0
+  fi
+  python3 - "$src" "$PROJECTS/$name/.handoff/memory" "$name" "$ME" <<'PY'
+import os,sys,json,hashlib,datetime,shutil
+src,outroot,name,me=sys.argv[1:5]
+files=[f for f in (os.listdir(src) if os.path.isdir(src) else [])
+       if os.path.isfile(os.path.join(src,f))]
+if not files:
+    print("  no memory on this Mac for this project — nothing to snapshot"); sys.exit(0)
+ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+dest=os.path.join(outroot,f"{ts}-{me}")
+os.makedirs(dest)
+man=[]
+for f in sorted(files):
+    shutil.copyfile(os.path.join(src,f),os.path.join(dest,f))
+    d=os.path.join(dest,f)
+    man.append({"path":f,"size":os.path.getsize(d),
+                "md5":hashlib.md5(open(d,"rb").read()).hexdigest()})
+json.dump({"project":name,"machine":me,"at":ts,
+           "count":len(man),"bytes":sum(x["size"] for x in man),"files":man},
+          open(os.path.join(dest,"snapshot.json"),"w"),indent=2)
+print(f"  memory: {len(man)} file(s), {sum(x['size'] for x in man)/1000:.1f} KB -> .handoff/memory/{ts}-{me}/")
+PY
+}
+
+cmd_memory_install(){
+  local name="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1; shift;;
+      *)       [ -n "$name" ] || name="$1"; shift;;
+    esac
+  done
+  [ -n "$name" ] || die "usage: mirror memory-install <Project> [--force]"
+  require_claude_quit
+  local dst
+  dst="$(memory_dir "$name")" || die "'$name' is not defined on this Mac — run 'mirror receive' first"
+  # enumerating the chain is what makes the drive surface a snapshot that has not landed yet
+  ls "$PROJECTS/$name/.handoff" "$PROJECTS/$name/.handoff/memory" >/dev/null 2>&1
+  ls "$PROJECTS/$name/.handoff/memory/"*/ >/dev/null 2>&1
+  python3 - "$PROJECTS/$name/.handoff/memory" "$dst" "$force" "$ME" "$name" <<'PY'
+import os,sys,json,hashlib,shutil,glob,datetime,time
+root,dst,force,me,name=sys.argv[1],sys.argv[2],sys.argv[3]=="1",sys.argv[4],sys.argv[5]
+snaps=[d for d in sorted(glob.glob(os.path.join(root,"*")))
+       if os.path.isfile(os.path.join(d,"snapshot.json"))]
+if not snaps:
+    print("  no memory snapshot came with this project")
+    print("  (if one was just sent, the drive may still be delivering — re-run:")
+    print(f"      mirror memory-install \"{name}\""); sys.exit(3)
+snap=snaps[-1]
+man=json.load(open(os.path.join(snap,"snapshot.json")))
+if man.get("machine")==me:
+    print(f"  newest memory snapshot is this Mac's own ({man['at']}) — nothing to install"); sys.exit(3)
+
+def ensure_local(p):
+    # dataless files read empty with no error; reading is what pulls them (finding 1)
+    for _ in range(30):
+        try: st=os.stat(p)
+        except OSError: return False
+        if st.st_size==0 or st.st_blocks>0: return True
+        try:
+            with open(p,"rb") as fh:
+                while fh.read(1<<20): pass
+        except OSError: return False
+        time.sleep(1)
+    return False
+
+bad=[]
+for f in man["files"]:
+    p=os.path.join(snap,f["path"])
+    if not ensure_local(p): bad.append(f["path"]); continue
+    if hashlib.md5(open(p,"rb").read()).hexdigest()!=f["md5"]: bad.append(f["path"])
+if bad:
+    print(f"  {len(bad)} memory file(s) not fully delivered or corrupt — nothing installed:")
+    for b in bad[:5]: print(f"      {b}")
+    sys.exit(1)
+
+existing=[f for f in (os.listdir(dst) if os.path.isdir(dst) else [])
+          if os.path.isfile(os.path.join(dst,f))]
+if existing and not force:
+    print(f"  this Mac already has {len(existing)} memory file(s) for '{name}' — NOT overwriting.")
+    print(f"  The snapshot from {man['machine']} ({man['at']}) holds {man['count']} file(s).")
+    print("  To replace them (current store is backed up first):")
+    print(f"      mirror memory-install \"{name}\" --force"); sys.exit(3)
+if existing:
+    ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    bak=dst.rstrip("/")+".bak-"+ts
+    shutil.copytree(dst,bak)
+    print(f"  existing store backed up to {os.path.basename(bak)}")
+    for f in existing: os.remove(os.path.join(dst,f))
+os.makedirs(dst,exist_ok=True)
+for f in man["files"]:
+    shutil.copyfile(os.path.join(snap,f["path"]),os.path.join(dst,f["path"]))
+print(f"  installed {man['count']} memory file(s) from {man['machine']} ({man['at']}) — {man['bytes']/1000:.1f} KB")
+PY
+  local rc=$?
+  case $rc in
+    0) echo "  Relaunch Claude. Sessions here now start with the other Mac's memory.";;
+    3) rc=0;;   # a no-op is a success, just not one worth a relaunch prompt
+  esac
+  return $rc
 }
 
 # ---- checkout lock ----------------------------------------------------------
@@ -855,6 +993,7 @@ PY
   # iCloud does not reliably propagate an in-place edit the peer has already cached.
   if have_project "$name"; then
     cmd_project_export "$name" | sed -n '/exported/p;/instructions:/p;/manifest:/p'
+    cmd_memory_snapshot "$name"
   else
     echo "  ! '$name' is not defined as a project on this Mac — sending files only"
     write_manifest "$name"
@@ -983,6 +1122,19 @@ cmd_receive(){
   # 4. claim it, and show the document
   bash "$e" pickup "$name" || die "could not claim '$name'"
 
+  # memory follows ownership: install the snapshot the sender took, if one arrived
+  ls "$PROJECTS/$name/.handoff" "$PROJECTS/$name/.handoff/memory" >/dev/null 2>&1
+  ls "$PROJECTS/$name/.handoff/memory/"*/ >/dev/null 2>&1
+  if have_project "$name" && ls "$PROJECTS/$name/.handoff/memory/"*/snapshot.json >/dev/null 2>&1; then
+    if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+      echo
+      echo "  ⚠ a memory snapshot came with this project, but Claude is running."
+      echo "    Quit Claude, then:  mirror memory-install \"$name\""
+    else
+      cmd_memory_install "$name"
+    fi
+  fi
+
   # 5. if this Mac locked itself out when it sent the project away, undo that now
   if [ -f "$HOLDDIR/$name.json" ]; then
     if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
@@ -1018,6 +1170,8 @@ case "${1:-help}" in
   send)     shift; cmd_send "$@";;
   hold)     shift; cmd_hold "$@";;
   release)  shift; cmd_release "$@";;
+  memory-snapshot) shift; cmd_memory_snapshot "$@";;
+  memory-install)  shift; cmd_memory_install "$@";;
   receive)  shift; cmd_receive "$@";;
   use-root) shift; cmd_use_root "$@";;
   deploy)   shift; cmd_deploy "$@";;

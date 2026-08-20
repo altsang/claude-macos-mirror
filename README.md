@@ -45,7 +45,7 @@ Worth internalising before anything else — getting this wrong wastes hours.
 | Cloud projects, their chats, instructions, memory | ✅ server-side |
 | **Projects with a local folder** (`Local` badge) | ⚠️ definition is copyable; nothing automatic |
 | **Conversations in a local project** | ❌ never — this is why the handoff document exists |
-| **A local project's accumulated memory** | ❌ per-machine, on local disk — real, sizeable, and copyable in principle (finding 12c) |
+| **A local project's accumulated memory** | ❌ natively — but `send`/`receive` carry it (finding 12c) |
 | Folder links (which folder a project reads) | ❌ per-machine — but `mirror` writes them; cloud projects re-grant per session |
 
 ## What this repo does — and doesn't
@@ -349,9 +349,18 @@ one by md5 against the manifest**, defines the project here if this Mac has neve
 step that needs Claude quit), claims it, prints the handoff document, and copies it to the
 clipboard. It refuses to claim a project that was not handed to this machine.
 
-Then open the project in Cowork and **⌘V**. That document is the receiving session's whole brief;
-its own "Before you start" section carries the prerequisites, which is why `/pickup` is no longer
-installed here.
+Then open the project in Cowork and **⌘V**.
+
+**Memory travels too.** A local project accumulates per-machine memory (finding 12c). `send`
+snapshots the holder's store into `.handoff/memory/` — md5-manifested, upload-verified with
+everything else — and `receive` installs it, but **only into an empty store**. A store this Mac has
+built is never overwritten silently; `mirror memory-install "PROJECT" --force` replaces it after
+backing it up, and a Mac never installs its own snapshot coming home. So the receiving session
+starts with everything the sending one learned, and the handoff document goes back to being the
+baton — status and next actions, not background.
+
+The pasted document is still the brief; its own "Before you start" section carries the
+prerequisites, which is why `/pickup` is no longer installed here.
 
 ### Locking yourself out of a project you handed away
 

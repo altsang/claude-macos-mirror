@@ -353,8 +353,14 @@ Two consequences:
   Madoka and none on Ji-su, and the handoff document said so in its own words — "the sending
   machine had project memory for this work; Ji-su does not, so everything needed is below."
 
-Not implemented. Merging two divergent stores is the hard part, and overwriting a machine's
-accumulated memory is destructive in a way file transfer is not.
+Implemented 2026-08-20, conservatively. `send` snapshots the holder's store into
+`PROJECT/.handoff/memory/<ts>-<machine>/` with an md5 manifest (`snapshot.json`), upload-verified
+with everything else; `receive` installs the newest snapshot **only when this Mac's store is
+empty**. A non-empty store is refused with instructions — `mirror memory-install <P> --force`
+replaces it after copying it to `memory.bak-<ts>` — and a Mac never installs a snapshot it took
+itself. Corrupt or undelivered snapshot files abort the install with nothing written. Merging two
+divergent stores remains unimplemented, deliberately: memory follows ownership, so under the
+send/hold/receive discipline only one Mac should have been writing it anyway.
 
 ## 13. Cowork on a cloud project runs in a bridged VM with per-session folder access
 

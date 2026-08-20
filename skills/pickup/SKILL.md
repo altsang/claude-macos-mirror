@@ -5,6 +5,11 @@ description: Resume a workload handed over from the user's other Mac (Madoka / J
 
 # Pick up a workload from the other Mac
 
+> **Not installed by default.** `mirror receive` claims the project and hands you the document, so
+> this skill has nothing mechanical left to do. It is kept for anyone who wants the prerequisite
+> ritual inside the session — but note that a Cowork session cannot force iCloud to deliver, so it
+> can report a folder as missing when the data is merely un-enumerated. See `docs/findings.md` 12.
+
 Counterpart to `/handoff`. Shared projects live at one path identical on both Macs:
 
 ```

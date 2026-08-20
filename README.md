@@ -4,8 +4,8 @@ Move a Claude **Cowork** workload between two Macs — here `Madoka` (desktop) a
 
 Project files live in one shared-drive folder both machines can reach. Moving work across is two
 commands — `mirror send` on one Mac, `mirror receive` on the other — each of which blocks until the
-transfer is provable. Two Cowork skills (`/handoff`, `/pickup`) write and read the document that
-carries the *context*, which is the half no CLI can produce.
+transfer is provable. One Cowork skill, `/handoff`, writes the document that carries the *context* —
+the half no CLI can produce, because it lives in the conversation.
 
 ---
 
@@ -132,7 +132,8 @@ Two Google-specific cautions:
   different roots entirely.
 - **Check Drive is mirroring, not streaming.** In Google Drive → Settings → "My Drive syncing
   options", *Mirror files* keeps real files on disk. *Stream files* keeps them on-demand, which
-  behaves like iCloud's dataless files — `/pickup` handles it, but mirroring avoids the problem.
+  behaves like iCloud's dataless files — `mirror receive` handles it, but mirroring avoids the
+  problem.
 
 #### Either way
 
@@ -164,20 +165,20 @@ tree, so the drive delivers them.
 Claude app → **Settings → Skills → Add**, and upload:
 
 ```
-skills/handoff/SKILL.md      # required — nothing else can write the handoff document
-skills/pickup/SKILL.md       # optional — see below
+skills/handoff/SKILL.md
 ```
 
 Import on one Mac only; skills sync at the account level.
 
-**`/handoff` is the one that earns its place.** The context lives in the Cowork conversation, so
-only that session can write the document — and `mirror send` refuses to ship a project without one.
+**`/handoff` is the only skill this setup installs.** The context lives in the Cowork conversation,
+so only that session can write the document — and `mirror send` refuses to ship a project without
+one.
 
-**`/pickup` is optional now.** `mirror receive` already claims the project and puts the document on
-your clipboard, so the skill only re-checks the ownership log and walks the prerequisites. Keep it
-if you like that ritual; skip it and paste the document instead — the document's own prerequisite
-section does the same job. Note that a Cowork session cannot force iCloud to deliver, so `/pickup`
-can report a folder as missing when it is merely un-enumerated; `mirror receive` cannot.
+**`skills/pickup/SKILL.md` is kept in the repo but deliberately not installed.** `mirror receive`
+already claims the project and puts the document on your clipboard, leaving the skill nothing
+mechanical to do — and a Cowork session cannot force iCloud to deliver, so it can report a folder
+as missing when the data is merely un-enumerated (finding 12). Pasting the document after `receive`
+is the same brief with one fewer failure mode. Upload it only if you want the prerequisite ritual.
 
 ### 3. Once per project
 
@@ -340,8 +341,9 @@ one by md5 against the manifest**, defines the project here if this Mac has neve
 step that needs Claude quit), claims it, prints the handoff document, and copies it to the
 clipboard. It refuses to claim a project that was not handed to this machine.
 
-Then open the project in Cowork and **⌘V**. Optionally run `/pickup`, which re-checks the ownership
-log, loads the document as its brief, and verifies the prerequisites before touching anything.
+Then open the project in Cowork and **⌘V**. That document is the receiving session's whole brief;
+its own "Before you start" section carries the prerequisites, which is why `/pickup` is no longer
+installed here.
 
 ### Why the split
 

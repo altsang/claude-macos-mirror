@@ -482,7 +482,8 @@ print(f'  added "{name}"')
 print(f'  folder: {path}' + ('' if os.path.exists(path) else '   <-- not delivered yet; mirror receive will wait for it'))
 PY
   echo "  Relaunch Claude. The project appears with its name and instructions."
-  echo "  Its chat history will be empty — that is expected; use 'mirror pickup' for context."
+  echo "  Its chat history will be empty — that is expected; the handoff document carries"
+  echo "  the context, and 'mirror receive' hands it to you."
 }
 
 cmd_project_repath(){

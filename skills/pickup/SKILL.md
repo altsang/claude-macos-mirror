@@ -1,6 +1,6 @@
 ---
 name: pickup
-description: Resume a workload handed over from the user's other Mac (Madoka / Ji-su). Use when the user says to pick up, resume, or continue work handed off from their other machine, or invokes /pickup by name. Claims the shared project, forces iCloud to download files that are present in name only, and loads the handoff document as working context before doing anything.
+description: Resume a workload handed over from the user's other Mac (Madoka / Ji-su). Use when the user says to pick up, resume, or continue work handed off from their other machine, or invokes /pickup by name. Loads the handoff document as working context, confirms this machine actually holds the project, and checks the prerequisites before any work starts.
 ---
 
 # Pick up a workload from the other Mac
@@ -11,76 +11,63 @@ Counterpart to `/handoff`. Shared projects live at one path identical on both Ma
 ~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/PROJECT
 ```
 
-```bash
-MIRROR=~/workspace/claude-macos-mirror/bin/mirror
-```
+The transfer itself — waiting for the drive, md5-verifying every file against the manifest,
+defining the project on this Mac, and claiming ownership — is done by `mirror receive` in a
+terminal, before you are invoked. This session is sandboxed to the project folder and cannot
+verify a transfer or reach any CLI, so do not attempt those steps or write ownership events.
 
-## Step 1 — Materialize, verify, claim
+## Step 1 — Confirm this machine actually holds the project
 
-All of this is plain file work inside the project folder. **No CLI, terminal, or computer-use
-needed** — the session is sandboxed to the project folder, and everything required is there.
+Read `PROJECT_FOLDER/.handoff/events/*.json`. Sort by filename; the newest event is the current
+state — owner is `to` if its verb is `handoff`, `machine` if it is `claim`.
 
-**1a. Read every file** in the project folder (skip `.handoff/`). iCloud keeps evicted files
-*dataless*: correct name and size in a listing, contents still remote, and a read returns empty or
-truncated **with no error**. There are no `.icloud` stub files to warn you. Reading is what pulls
-the content down, so do it before trusting anything you see.
+- **Newest is a `claim` by this machine** → good, `mirror receive` ran. Continue.
+- **Newest is a `handoff` to this machine** → the files are here but nothing verified them. Stop
+  and ask the user to run `mirror receive "PROJECT"` in a terminal first. It confirms every file
+  arrived complete, which you cannot check from in here: a file that never uploaded is simply
+  **absent** from this Mac's listing, not empty, so nothing about the folder looks wrong.
+- **Newest names the other Mac** → this project was not handed over. Say so and stop. Editing it
+  anyway is how iCloud produces `(conflicted copy)` files.
+- **No events at all** → this project has never been through a handoff; ask before assuming.
 
-If a file still reads as empty after a retry, **stop and tell the user**. Do not proceed on partial
-data — in a financial extract that means silently reasoning from nothing.
+## Step 2 — Load the document as your brief
 
-**1b. Read the ownership log** at `PROJECT_FOLDER/.handoff/events/*.json`. Sort by filename; the
-newest event determines the current owner — `to` if its verb is `handoff`, `machine` if it is
-`claim`. If the owner is not this machine, say so and check before continuing: two Macs editing one
-synced folder is what produces iCloud conflict copies.
+The newest event's `handoff_doc` field names the file. Read that exact file — do not guess from
+the folder listing, which may hold documents from earlier topics.
 
-**1c. Write a claim event** so the other Mac knows you have it:
-
-```
-PROJECT_FOLDER/.handoff/events/TIMESTAMP-THIS_MACHINE-claim.json
-```
-
-```json
-{ "project": "Quicken Reconciliation",
-  "verb": "claim",
-  "machine": "Ji-su",
-  "to": "Ji-su",
-  "note": "carried over from the handoff event",
-  "handoff_doc": "HANDOFF_fidelity_big_cost_basis.md",
-  "at": "20260819T144500Z" }
-```
-
-Append only — never edit or delete existing events.
-
-## Step 2 — Load the context
-
-The command prints `HANDOFF doc`. Read it as your working brief, not as background. It was written
-by a session with context you do not have — where it contradicts your assumptions, it wins.
+Read it as your working brief, not as background. It was written by a session with context you do
+not have; where it contradicts your assumptions, it wins.
 
 ## Step 3 — Verify prerequisites before acting
 
-Check each prerequisite **on this machine**. The common failure is work that needs something only
-the other Mac has — Quicken under Parallels, a mounted removable volume, a live web session.
+Work through the document's prerequisite section **on this machine**. The common failure is work
+that needs something only the other Mac has — Quicken under Parallels, a mounted volume, a live
+web session.
 
 If one is missing, say so and stop. Do not improvise a substitute. Offer to hand the work back.
 
 ## Step 4 — Confirm the plan
 
-Before executing, tell the user what the previous machine finished, what remains, and what you will
-do first. Cheaper to catch a stale handoff now than after a wrong edit.
+Before executing, tell the user what the previous machine finished, what remains, and what you
+will do first. Cheaper to catch a stale handoff now than after a wrong edit.
 
 ## If the folder is not readable
 
 Symptom: the folder appears connected but every read fails with *"is not inside a folder connected
-to Cowork on this device"*. Cause: the grant points at a **symlink**. Grant the real shared path
-instead — `$MIRROR path "PROJECT"` prints it, and `$MIRROR check` flags projects in this state.
-Finder cannot browse to `~/Library/Mobile Documents`; press ⌘⇧G in the picker and paste.
+to Cowork on this device"*. Cause: the project points at a **symlink**. It has to be repointed at
+the real shared path, which needs a terminal and a quit app — ask the user to run:
 
-Note also that **cloud** Cowork projects run in a bridged VM and could not reach `~/Library` at all.
-Use the `Local`-badged project for file work.
+```
+mirror check                                       # names the project and prints the fix
+mirror project-repath "PROJECT" "$(mirror path "PROJECT")"
+```
+
+Then relaunch Claude. No folder picker is involved.
+
+Note also that **cloud** Cowork projects run in a bridged VM and could not reach `~/Library` at
+all. Use the `Local`-badged project for file work.
 
 ## Ownership
 
-`pickup` transfers ownership to this machine. From here it is the only one that should edit the
-project. If the tool warns the project is owned by another machine, take it seriously — editing
-anyway is how iCloud produces `(conflicted copy)` files, and reconciling those by hand in a
-financial dataset is miserable.
+From the claim onward this machine is the only one that should edit the project. When the work is
+done or stalls, `/handoff` writes the return document and `mirror send` carries it back.

@@ -161,14 +161,78 @@ Confirmed with a random token in a canary file that could not be inferred from c
 
 Consequences, all now built in:
 
-- `mirror migrate` no longer leaves a symlink behind; it prints the shared path to grant.
+- `mirror migrate` no longer leaves a symlink behind; it repoints the project at the shared copy.
 - `mirror link` is deprecated, creates nothing, and explains this.
-- `mirror path <Project>` prints the exact path to paste.
-- `mirror check` flags any project whose granted folder is a symlink and prints the repath command.
+- `mirror path <Project>` prints the exact path (and copies it) for the rare hand grant.
+- `mirror check` flags any project whose folder is a symlink and prints the repath command.
 - `mirror project-repath <Project> <path>` fixes an existing one.
 
-Finder will not browse to `~/Library/Mobile Documents` — it is hidden, and Finder relabels
-`com~apple~CloudDocs` as "iCloud Drive". In the folder picker press **⌘⇧G** and paste the path.
+If you ever do open the picker, Finder will not browse to `~/Library/Mobile Documents` — it is
+hidden, and Finder relabels `com~apple~CloudDocs` as "iCloud Drive". Press **⌘⇧G** and paste.
+
+## 8b. The folder "grant" is one JSON field — no picker required
+
+Attaching a folder in the app writes exactly one thing: `folders[].path` on the project's entry in
+`spaces.json`. There is no bookmark blob, permission token or consent record anywhere else in
+`~/Library/Application Support/Claude` — a UI-attached project and one written by `mirror` have
+identical key sets (`createdAt, folders, id, instructions, links, name, projects, updatedAt`).
+`.project-cache/` holds cloud-project content only; the `grantedAt` keys in session files are
+computer-use app permissions, unrelated to folders.
+
+The app then **seeds each new session's `userSelectedFolders` from that field** — sessions in a
+project all carry its path without the picker ever being reopened. That is why writing the field is
+a complete grant rather than half of one, and why a symlinked path fails: the session's connected
+scope is that string, and a resolved real path falls outside it (finding 8).
+
+Two observations pinned it down:
+
+- 2026-08-19 20:46 `mirror` wrote the shared path for `Adobe Stock Plan` while Claude was quit;
+  the app launched at 20:46:10 and **rewrote `spaces.json` from memory at 20:52 keeping that
+  path** — it adopted a link it had never shown a picker for.
+- 2026-08-20 `Adobe Stock Plan` was imported onto the second Mac with
+  `mirror project-import --wait`, which writes the folder link itself. The picker was never
+  opened on that machine and Cowork read the project's files.
+
+So the whole per-machine grant step is `migrate` / `project-import` / `project-repath`, with Claude
+quit. What is *not* scriptable: the one-time macOS consent for the location (`TCC` shows
+`kTCCServiceFileProviderDomain` allowed for `com.anthropic.claudefordesktop` once granted), and any
+write while the app is running — it rewrites `spaces.json` from memory on exit and discards it.
+
+## 8c. `isUploaded` is the only way to know the bytes left this Mac
+
+`handoff` could only ever report work as *staged*: the local file is complete, and nothing said
+whether iCloud had taken it. The signal that answers it is FileProvider's, via
+`fileproviderctl evaluate <file>`, which prints `isUploaded` alongside the download keys.
+
+Verified 2026-08-20 on Darwin 25.5:
+
+| Probe | Result |
+|---|---|
+| `fileproviderctl evaluate FILE` → `isUploaded` | **works** — 0 immediately after write, 1 when uploaded |
+| `fileproviderctl evaluate FILE` → `isUploading` | useless — stayed 0 for an entire 110s upload |
+| `brctl status PATH` | fails: *"Client zone not found"* — the legacy CloudDocs path is dead |
+| `mdls -name kMDItemIsUbiquitous` | `(null)`, as are the other `kMDItemUbiquitous*` keys |
+
+A 25 MB file written into the shared tree read `isUploaded = 0` at creation and flipped to 1 after
+~110s. So poll `isUploaded`, never `isUploading`.
+
+Two consequences now built into `mirror send`:
+
+- It polls every file **including `.handoff/`** — the ownership event is precisely the part that
+  tells the other Mac it owns the project, and it uploads like any other file.
+- If the probe returns no `isUploaded` key at all (a drive that is not FileProvider-backed), it
+  says upload state is unavailable and exits 2 rather than blocking or claiming false proof.
+
+**Uploaded is still not delivered.** Only the receiving Mac's `claim` event proves that, which is
+what `send --wait` waits for.
+
+### Why pickup could not have caught a partial transfer
+
+An un-uploaded file is not dataless on the far Mac — it is **absent from the listing entirely**.
+`/pickup` read "every file in the folder" with no idea how many there should be, so a partial
+transfer looked exactly like a complete one. `project-export`/`import` had solved this with a
+manifest and md5s; handoff had no equivalent until `send` started writing the same manifest and
+`receive` started verifying against it.
 
 ## 9. Cowork on a cloud project runs in a bridged VM with per-session folder access
 
@@ -192,14 +256,31 @@ folder it was granted**. It cannot reach `~/workspace`, the shared `_handoff/` t
 path, and no additional permission grant changes that. Driving Terminal via computer-use is the
 only way to run an outside binary, which is a poor way to run a one-line command.
 
-So a skill must not depend on a CLI. Everything `handoff`/`pickup` need is a file operation, and
-all of it can live in the project folder:
+Everything a session *can* do is a file operation, and all of it can live in the project folder:
 
 | Operation | How the session does it |
 |---|---|
 | write the handoff document | ordinary file write |
-| record ownership | JSON file in `PROJECT/.handoff/events/` |
+| read the ownership log | JSON files in `PROJECT/.handoff/events/` |
 | materialize dataless files | **read them** — reading is what pulls content down |
+
+The first design read that as "a skill must not depend on a CLI", and duplicated the mechanics in
+both places. That was wrong in one direction: the sandbox also means a session can **never verify a
+transfer** — no `fileproviderctl` for upload state, no manifest outside the folder to md5 against,
+no view of the other project. Two implementations of the mechanics, neither able to prove anything.
+
+Revised 2026-08-20, each side now does only what the other cannot:
+
+| | Cowork session | terminal (`mirror`) |
+|---|---|---|
+| write the handoff document | **only it can** — the context is the conversation | no |
+| materialize, manifest, ownership event | no | **yes** |
+| verify upload / verify arrival by md5 | impossible from the sandbox | **yes** |
+| define the project, link its folder | no — `spaces.json` is outside | **yes** |
+
+So `/handoff` writes the document and stops; `mirror send` carries it. `mirror receive` verifies
+and claims; `/pickup` reads the result. One implementation of the mechanics, and the session is
+still never asked to do something it cannot check.
 
 Ownership events therefore live at `PROJECT/.handoff/events/TIMESTAMP-MACHINE-verb.json`
 (engine v6), not in the shared `_handoff/events/` tree where v4/v5 kept them. Verified 2026-08-19:

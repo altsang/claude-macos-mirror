@@ -56,6 +56,8 @@ Worth internalising before anything else — getting this wrong wastes hours.
 - **folder linking without the file picker** — `mirror` writes the project's folder path itself,
   on both Macs
 - **upload verification** — proof the bytes actually left this Mac, which "staged" never gave you
+- **one verb per side** — `send` and `receive`, each blocking until the transfer is provable,
+  instead of a sequence of commands none of which could confirm the others' work
 - **diagnostics** for the failure modes that are silent and confusing, chiefly symlinked folder
   links
 
@@ -204,7 +206,7 @@ is not involved:
 
 - on the Mac you just migrated, `migrate` already repointed it (it does this whenever Claude is
   quit; if it was running, it tells you to run `mirror project-repath`)
-- on the other Mac, `mirror project-import` writes it as part of the import
+- on the other Mac, `mirror receive` writes it as part of the transfer
 
 Confirm either way, then relaunch Claude:
 
@@ -357,13 +359,14 @@ other cannot, and the mechanics have exactly one implementation.
 **It is not synchronous.** Measured on a live handoff, 2026-08-20 — 21.6 KB of project across
 iCloud between these two Macs:
 
-| Leg | Time |
+| Leg | Measured |
 |---|---|
-| `send` → every file confirmed `isUploaded` | 25s (5 files) |
-| event visible on the receiving Mac | ~2m at best, longer when it has been asleep |
-| receiving Mac's `claim` visible back on the sender | ~90s–2m |
+| `send` → every file confirmed `isUploaded` | **25s** (5 files, 21.6 KB) · 56s for a 10 MB payload · ~110s for 25 MB |
+| `send` → receiving Mac has verified and written its `claim` | **2m12s** · 2m46s in the 10 MB run |
+| that `claim` becoming visible back on the sender | **~90s** further |
 
-Bulk is slower but not proportionally: a 10 MB payload took 56s to upload, 25 MB about 110s.
+Upload scales with size and you can watch it. Delivery to an idle peer runs ~2–3 minutes almost
+regardless of size — the latency is the drive noticing, not the bytes moving.
 
 **Uploaded ≠ delivered.** `send` proves the bytes left this Mac; only the claim event proves they
 landed. `send --wait` waits for it.
@@ -382,8 +385,19 @@ landed. `send --wait` waits for it.
 ./bin/mirror materialize "$(./bin/mirror path 'PROJECT')"
 ```
 
-`handoff`, `pickup`, `project-export`, `project-import` and `wait` still exist and still work —
-`send` and `receive` are those, composed, with the verification that was missing.
+The flags worth knowing on the daily pair:
+
+| Flag | On | Effect |
+|---|---|---|
+| `--note "…"` | `send` | one line recorded in the ownership log; what `mirror status` shows |
+| `--wait` | `send` | after the upload, block until the other Mac claims it |
+| `--doc FILE` | `send` | name the document explicitly instead of taking the newest `HANDOFF*.md` |
+| `--no-doc` | `send` | ship files with no context — for a first move, or a folder that isn't a project |
+| `--force` | `send` | send a project the log says this Mac doesn't hold. Check `mirror log` first |
+| `--timeout N` | both | seconds for the whole wait (default 900) |
+
+`handoff`, `pickup`, `project-export`, `project-import` and `wait` still exist and still work as
+separate verbs — `send` and `receive` are those, composed, with the verification that was missing.
 
 ---
 
@@ -393,8 +407,10 @@ landed. `send --wait` waits for it.
 ~/Library/Mobile Documents/com~apple~CloudDocs/Claude/
     Projects/PROJECT/                     shared files  ← the project reads THIS path
     Projects/PROJECT/.handoff/events/     append-only ownership log
-    _handoff/bin/coworkctl-v6.sh          engine (versioned — never edited in place)
-    _handoff/projects/PROJECT.json        exported project definitions
+    Projects/PROJECT/HANDOFF_topic.md     the context, written by /handoff
+    _handoff/bin/coworkctl-v7.sh          engine (versioned — never edited in place)
+    _handoff/projects/PROJECT.TS.json     exported project definitions, one per send
+    _handoff/projects/PROJECT.TS.manifest.json   sizes + md5s, what receive verifies against
     _handoff/{handoff,pickup}.skill       importable skill bundles
 ```
 
@@ -413,8 +429,8 @@ two-writer hazard that produces conflict copies.
 | A file reads empty, no error | evicted/dataless — contents still in the cloud | read it again; `mirror materialize`. `du` and `.icloud` checks cannot see this |
 | Nothing arrives on the other Mac | it's asleep, or you didn't enumerate | `ssh peer 'uptime; pmset -g ps'`; list the whole parent chain, not just the leaf |
 | `(name) 2.ext` files appearing | two writers to one synced path | `mirror conflicts` (reports only), remove by exact path — **never** by glob |
-| `/pickup` says there is no `.handoff` directory | the events dir is uploaded but was never enumerated on this Mac, and a sandboxed session cannot force it | `mirror receive "P"` — its wait loop lists the whole chain, which is what makes the drive deliver |
-| A skill tries to do the transfer itself | old skill version registered | re-upload `skills/*/SKILL.md`; current versions hand the transfer to `mirror send`/`receive` |
+| A Cowork session says the project has no `.handoff` directory | uploaded, but never enumerated on this Mac — and a sandboxed session cannot force the drive to deliver | `mirror receive "P"` — its wait loop lists the whole parent chain, which is what makes iCloud hand it over |
+| `/handoff` tries to do the transfer itself | old skill version registered | re-upload `skills/handoff/SKILL.md`; the current one writes the document and stops |
 | Skill upload rejected, "cannot have XML tags" | angle-bracket placeholders in `SKILL.md` | use bare words, not `<Project>` |
 | Project missing on the other Mac | local projects don't sync | `mirror send "P" --to MACHINE --no-doc`, then `mirror receive "P"` |
 | Not sure the files actually reached iCloud | `handoff` only staged them; nothing verified the upload | `mirror send` — it polls `isUploaded` until every file is up |

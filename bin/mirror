@@ -167,7 +167,11 @@ cmd_path(){
   local name="${1:-}"; [ -n "$name" ] || die "usage: mirror path <Project>"
   [ -d "$PROJECTS/$name" ] || die "'$name' is not in the shared tree ($PROJECTS)"
   echo "$PROJECTS/$name"
-  if command -v pbcopy >/dev/null 2>&1; then
+  # Only hijack the clipboard when a human is reading this. Inside a command
+  # substitution -- cd "$(mirror path X)" -- stdout is a pipe, and copying there would
+  # silently overwrite the handoff document that 'mirror receive' just put on the
+  # clipboard, so the next paste lands a path instead of the brief.
+  if [ -t 1 ] && command -v pbcopy >/dev/null 2>&1; then
     printf '%s' "$PROJECTS/$name" | pbcopy
     echo "  (copied to clipboard — only needed for a hand grant: Add folder, Cmd-Shift-G, paste)" >&2
   fi

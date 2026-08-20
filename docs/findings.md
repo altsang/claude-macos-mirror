@@ -163,7 +163,9 @@ Consequences, all now built in:
 
 - `mirror migrate` no longer leaves a symlink behind; it repoints the project at the shared copy.
 - `mirror link` is deprecated, creates nothing, and explains this.
-- `mirror path <Project>` prints the exact path (and copies it) for the rare hand grant.
+- `mirror path <Project>` prints the exact path for the rare hand grant, and copies it **only when
+  stdout is a terminal** — inside `cd "$(mirror path X)"` it must not clobber the handoff document
+  that `mirror receive` just put on the clipboard.
 - `mirror check` flags any project whose folder is a symlink and prints the repath command.
 - `mirror project-repath <Project> <path>` fixes an existing one.
 

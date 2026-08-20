@@ -67,14 +67,83 @@ cd ~/workspace/claude-macos-mirror
 ./bin/mirror deploy
 ```
 
-Defaults to iCloud Drive. For another drive:
+### Choosing where the shared folder lives
+
+Everything hinges on one folder that **both Macs can see**. Any synced drive works — iCloud Drive,
+Google Drive, Dropbox — but the drive has to actually be mounted on *both* machines.
+
+**Check first.** Run this on each Mac; only a path that exists on both is a candidate:
 
 ```bash
-./bin/mirror use-root "~/Library/CloudStorage/GoogleDrive-you@gmail.com/My Drive/Claude"
+ls -d ~/Library/Mobile\ Documents/com~apple~CloudDocs \
+      ~/Library/CloudStorage/* 2>/dev/null
 ```
 
-Roots need not match across machines — grants are per-machine anyway — but matching paths mean one
-copy-pasteable string works on both.
+A real example of why this matters — on one setup:
+
+```
+~/Library/Mobile Documents/com~apple~CloudDocs                    ✓ both Macs
+~/Library/CloudStorage/GoogleDrive-altsang@gmail.com/My Drive     ✓ both Macs
+~/Library/CloudStorage/GoogleDrive-agilecto@gmail.com/My Drive    ✗ desktop only
+~/Library/CloudStorage/Dropbox                                    ✗ desktop only
+```
+
+Dropbox was installed and looked like a fine choice, but it isn't signed in on the laptop — it would
+have failed silently at the worst moment.
+
+#### Option A — iCloud Drive (the default)
+
+Nothing to configure. The tool creates and uses:
+
+```
+~/Library/Mobile Documents/com~apple~CloudDocs/Claude/
+```
+
+The path is identical on every Mac regardless of which Apple ID is signed in, which is why it is the
+default. Both Macs must be on the **same Apple ID**:
+
+```bash
+defaults read MobileMeAccounts Accounts | grep AccountID
+```
+
+#### Option B — Google Drive
+
+The path contains **your account email**, so find yours first:
+
+```bash
+ls -d ~/Library/CloudStorage/GoogleDrive-*
+# → /Users/you/Library/CloudStorage/GoogleDrive-altsang@gmail.com
+```
+
+Then point the tool at a `Claude` folder inside `My Drive` — run this **on each Mac**:
+
+```bash
+./bin/mirror use-root "~/Library/CloudStorage/GoogleDrive-altsang@gmail.com/My Drive/Claude"
+```
+
+Two Google-specific cautions:
+
+- **If you have more than one Google account signed in**, make sure both Macs use the *same* one.
+  The email is in the path, so `GoogleDrive-you@gmail.com` and `GoogleDrive-work@company.com` are
+  different roots entirely.
+- **Check Drive is mirroring, not streaming.** In Google Drive → Settings → "My Drive syncing
+  options", *Mirror files* keeps real files on disk. *Stream files* keeps them on-demand, which
+  behaves like iCloud's dataless files — `/pickup` handles it, but mirroring avoids the problem.
+
+#### Either way
+
+The tool creates the same structure under whichever root you choose:
+
+```
+CHOSEN_ROOT/
+    Projects/PROJECT/       ← your project files; this is the folder you grant Cowork
+    _handoff/               ← engine, skill bundles, exported project definitions
+```
+
+Roots do **not** have to match across machines — folder grants are per-machine, so each Mac can use
+its own path. Matching paths are simply convenient: one copy-pasteable string works on both.
+
+Confirm before going further:
 
 ```bash
 ./bin/mirror check      # ✓ shared tree present   ← if ✗, the drive hasn't synced yet. Fix that first.

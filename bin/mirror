@@ -433,7 +433,10 @@ def enumerate_chain():
         try: os.listdir(d)
         except OSError: pass
 
-def present():
+def present(pull=True):
+    """Survey the project. Files arrive DATALESS -- listed with the right size but no
+    content -- and nothing materializes them except a read. So this reads anything not
+    yet materialized rather than waiting for a state that would never arrive on its own."""
     out={}
     for dp,_,fn in os.walk(root):
         if ".handoff" in dp.split(os.sep): continue
@@ -442,7 +445,12 @@ def present():
             fp=os.path.join(dp,f)
             try: st=os.stat(fp)
             except OSError: continue
-            # dataless = present in the listing but no content yet
+            if pull and st.st_size>0 and st.st_blocks==0:
+                try:
+                    with open(fp,"rb") as fh:
+                        while fh.read(1<<20): pass
+                    st=os.stat(fp)
+                except OSError: pass
             out[os.path.relpath(fp,root)]=(st.st_size, st.st_blocks>0)
     return out
 
@@ -482,7 +490,7 @@ while time.time()-start<timeout:
     # no manifest: settle for two quiet rounds
     if not expected and have and mat==have:
         time.sleep(6); enumerate_chain()
-        if len(present())==have:
+        if len(present(pull=False))==have:
             print(f"\n  ✓ {have} files present and materialized ({el}s); no manifest, so unverified")
             sys.exit(0)
     time.sleep(3)

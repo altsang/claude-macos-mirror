@@ -2,9 +2,10 @@
 
 Move a Claude **Cowork** workload between two Macs — here `Madoka` (desktop) and `Ji-su` (laptop).
 
-Project files live in one shared-drive folder both machines can reach. A small CLI sets that up and
-verifies it; two skills (`/handoff`, `/pickup`) do the day-to-day transfer from inside a Cowork
-session.
+Project files live in one shared-drive folder both machines can reach. Moving work across is two
+commands — `mirror send` on one Mac, `mirror receive` on the other — each of which blocks until the
+transfer is provable. Two Cowork skills (`/handoff`, `/pickup`) write and read the document that
+carries the *context*, which is the half no CLI can produce.
 
 ---
 
@@ -163,12 +164,20 @@ tree, so the drive delivers them.
 Claude app → **Settings → Skills → Add**, and upload:
 
 ```
-skills/handoff/SKILL.md
-skills/pickup/SKILL.md
+skills/handoff/SKILL.md      # required — nothing else can write the handoff document
+skills/pickup/SKILL.md       # optional — see below
 ```
 
-Import on one Mac only; skills sync at the account level. `/handoff` and `/pickup` become available
-in Cowork.
+Import on one Mac only; skills sync at the account level.
+
+**`/handoff` is the one that earns its place.** The context lives in the Cowork conversation, so
+only that session can write the document — and `mirror send` refuses to ship a project without one.
+
+**`/pickup` is optional now.** `mirror receive` already claims the project and puts the document on
+your clipboard, so the skill only re-checks the ownership log and walks the prerequisites. Keep it
+if you like that ritual; skip it and paste the document instead — the document's own prerequisite
+section does the same job. Note that a Cowork session cannot force iCloud to deliver, so `/pickup`
+can report a folder as missing when it is merely un-enumerated; `mirror receive` cannot.
 
 ### 3. Once per project
 
@@ -343,8 +352,16 @@ other cannot, and the mechanics have exactly one implementation.
 
 ### Expectations
 
-**It is not synchronous.** ~30s at best; minutes if the receiving Mac has been asleep. Measured
-2026-08-20: a 25 MB file took ~110s to upload.
+**It is not synchronous.** Measured on a live handoff, 2026-08-20 — 21.6 KB of project across
+iCloud between these two Macs:
+
+| Leg | Time |
+|---|---|
+| `send` → every file confirmed `isUploaded` | 25s (5 files) |
+| event visible on the receiving Mac | ~2m at best, longer when it has been asleep |
+| receiving Mac's `claim` visible back on the sender | ~90s–2m |
+
+Bulk is slower but not proportionally: a 10 MB payload took 56s to upload, 25 MB about 110s.
 
 **Uploaded ≠ delivered.** `send` proves the bytes left this Mac; only the claim event proves they
 landed. `send --wait` waits for it.
@@ -394,7 +411,8 @@ two-writer hazard that produces conflict copies.
 | A file reads empty, no error | evicted/dataless — contents still in the cloud | read it again; `mirror materialize`. `du` and `.icloud` checks cannot see this |
 | Nothing arrives on the other Mac | it's asleep, or you didn't enumerate | `ssh peer 'uptime; pmset -g ps'`; list the whole parent chain, not just the leaf |
 | `(name) 2.ext` files appearing | two writers to one synced path | `mirror conflicts` (reports only), remove by exact path — **never** by glob |
-| `/handoff` says it can't reach the CLI | old skill version registered | re-upload `skills/*/SKILL.md`; current versions need no CLI |
+| `/pickup` says there is no `.handoff` directory | the events dir is uploaded but was never enumerated on this Mac, and a sandboxed session cannot force it | `mirror receive "P"` — its wait loop lists the whole chain, which is what makes the drive deliver |
+| A skill tries to do the transfer itself | old skill version registered | re-upload `skills/*/SKILL.md`; current versions hand the transfer to `mirror send`/`receive` |
 | Skill upload rejected, "cannot have XML tags" | angle-bracket placeholders in `SKILL.md` | use bare words, not `<Project>` |
 | Project missing on the other Mac | local projects don't sync | `mirror send "P" --to MACHINE --no-doc`, then `mirror receive "P"` |
 | Not sure the files actually reached iCloud | `handoff` only staged them; nothing verified the upload | `mirror send` — it polls `isUploaded` until every file is up |

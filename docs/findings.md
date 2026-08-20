@@ -170,7 +170,7 @@ Consequences, all now built in:
 If you ever do open the picker, Finder will not browse to `~/Library/Mobile Documents` — it is
 hidden, and Finder relabels `com~apple~CloudDocs` as "iCloud Drive". Press **⌘⇧G** and paste.
 
-## 8b. The folder "grant" is one JSON field — no picker required
+## 9. The folder "grant" is one JSON field — no picker required
 
 Attaching a folder in the app writes exactly one thing: `folders[].path` on the project's entry in
 `spaces.json`. There is no bookmark blob, permission token or consent record anywhere else in
@@ -198,7 +198,7 @@ quit. What is *not* scriptable: the one-time macOS consent for the location (`TC
 `kTCCServiceFileProviderDomain` allowed for `com.anthropic.claudefordesktop` once granted), and any
 write while the app is running — it rewrites `spaces.json` from memory on exit and discards it.
 
-## 8c. `isUploaded` is the only way to know the bytes left this Mac
+## 10. `isUploaded` is the only way to know the bytes left this Mac
 
 `handoff` could only ever report work as *staged*: the local file is complete, and nothing said
 whether iCloud had taken it. The signal that answers it is FileProvider's, via
@@ -234,7 +234,53 @@ transfer looked exactly like a complete one. `project-export`/`import` had solve
 manifest and md5s; handoff had no equivalent until `send` started writing the same manifest and
 `receive` started verifying against it.
 
-## 9. Cowork on a cloud project runs in a bridged VM with per-session folder access
+## 11. What a verified transfer actually costs, end to end
+
+First real cross-Mac run of `send`/`receive`, 2026-08-20, Madoka → Ji-su over iCloud.
+
+A plumbing test with a 10 MB payload:
+
+```
+20260820T091632Z  Madoka  handoff -> Ji-su    upload verified 4/4 in 56s
+20260820T091918Z  Ji-su   claim   -> Ji-su    2m46s after the send
+                                              claim visible on Madoka ~90s later
+```
+
+Then the live project (21.6 KB — a spreadsheet and an 8.5 KB handoff document):
+
+```
+20260820T092533Z  Madoka  handoff -> Ji-su    upload verified 5/5 in 25s
+20260820T092745Z  Ji-su   claim   -> Ji-su    2m12s after the send
+```
+
+So the shape is: **upload is fast and knowable, delivery is slow and only observable from the far
+side.** Uploading is bounded by size (56s for 10 MB, 25s for 21 KB, ~110s for 25 MB) and can be
+confirmed locally. Delivery to an idle peer runs ~2–3 minutes regardless of size, and the only
+proof is the `claim` event coming back.
+
+The file count polled is larger than the project's: 5 files for a 2-file project, because the
+ownership event and the manifest upload too, and they are exactly what the far Mac needs first.
+
+## 12. A sandboxed session cannot make iCloud deliver — so it cannot tell "missing" from "late"
+
+Observed 2026-08-20 on the live handoff. Every file, `.handoff/events/*.json` included, read
+`isUploaded = 1` on the sending Mac. On the receiving Mac, `/pickup` in a Cowork session reported
+**"no `.handoff` directory"** — and it was right about what it could see.
+
+iCloud does not push to an idle Mac; a parent has to be enumerated before new entries appear
+(finding 3). A Cowork session listing its project folder does not prod the drive hard enough to
+surface a hidden subdirectory that has never been materialized there. The data was in the cloud the
+whole time.
+
+The session therefore cannot distinguish **not sent**, **not yet delivered**, and **delivered but
+not enumerated** — three states with three different responses, and it sees one. `mirror receive`
+resolves it by listing the whole chain (`_handoff/`, `Projects/`, the project, `.handoff/`,
+`.handoff/events/`) every six seconds until the event appears, then verifying by md5.
+
+Practical consequence: **when a skill says something is missing from a shared folder, do not believe
+it until a terminal has looked.** Run `mirror receive`, or at minimum `ls` the parent chain.
+
+## 13. Cowork on a cloud project runs in a bridged VM with per-session folder access
 
 A Cowork session started from a **cloud** project runs in a cloud VM (`/home/claude`, Linux) with a
 bridge to the Mac — it reports the machine as e.g. `ji-su-local`. Two consequences:
@@ -249,7 +295,7 @@ bridge to the Mac — it reports the machine as e.g. `ji-su-local`. Two conseque
 So for file-heavy work, use a **local** project. Cloud projects are better when you want chats,
 instructions and memory to sync; local projects are what actually reach the disk.
 
-## 10. A Cowork session is sandboxed to its granted folder — put per-project state inside it
+## 14. A Cowork session is sandboxed to its granted folder — put per-project state inside it
 
 The shell a Cowork session gets on the Mac is an isolated Linux VM that sees **only the project
 folder it was granted**. It cannot reach `~/workspace`, the shared `_handoff/` tree, or any other
@@ -289,7 +335,7 @@ an event written as a plain file by hand is read back correctly by the CLI, and 
 The original design put them outside the project because it looked like shared infrastructure. It
 is per-project state, and putting it outside made the skill unusable from within a session.
 
-## 11. Custom Cowork skills already sync
+## 15. Custom Cowork skills already sync
 
 `skills-plugin/.../manifest.json` lists user-created skills with server-issued `skillId`s,
 `creatorType: "user"`, and server timestamps — it is an account-level manifest.

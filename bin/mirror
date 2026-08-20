@@ -106,8 +106,10 @@ cmd_deploy(){
   fi
   echo
   echo "Note: the engine and skill bundles live inside the shared tree, so the OTHER Mac"
-  echo "receives them through the shared drive automatically. Over there you mainly need"
-  echo "'mirror use-root' (if its path differs) and 'mirror link'."
+  echo "receives them through the shared drive automatically. The 'mirror' CLI itself"
+  echo "travels by git, so run 'git pull' over there after changing it."
+  echo "On the other Mac you need 'mirror use-root' only if its shared path differs;"
+  echo "projects arrive with 'mirror receive <Project>'."
 }
 
 cmd_check(){
@@ -196,7 +198,7 @@ cmd_migrate(){
   [ -L "$src" ] && { ok "'$name' is already a symlink into the shared tree"; return 0; }
   [ -d "$src" ] || die "$src is not a directory"
   [ -e "$dst" ] && die "'$name' already exists in the shared tree.
-     To link this Mac to it instead: mirror link \"$name\""
+     This Mac picks it up instead of migrating:  mirror receive \"$name\""
 
   echo "migrating '$name' into the shared tree"
   mkdir -p "$dst"
@@ -266,15 +268,24 @@ cmd_rename(){
 
   local link="$HOME/Documents/Claude/Projects/$old"
   if [ -L "$link" ]; then rm "$link"; ok "removed stale symlink $link"; fi
-  cmd_link "$new"
+
+  # The rename broke this Mac's folder link -- it still names the old path. Repair it
+  # here rather than sending the user to the file picker; writing spaces.json IS the
+  # grant. Only the app being open stops us.
+  if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+    echo "  ⚠ Claude is running, so the folder link could not be updated. Quit it, then:"
+    echo "        mirror project-repath \"$new\" \"$PROJECTS/$new\""
+  else
+    cmd_project_repath "$new" "$PROJECTS/$new" >/dev/null 2>&1 \
+      && ok "folder link repointed at the renamed folder" \
+      || echo "  ! could not repoint — run: mirror project-repath \"$new\" \"$PROJECTS/$new\""
+  fi
 
   echo
-  echo "  IMPORTANT — two follow-ups:"
-  echo "   1. In Cowork on THIS Mac, re-grant the project folder. The old path is gone,"
-  echo "      so the existing grant now points at nothing."
-  echo "   2. On your OTHER Mac, once iCloud catches up:"
-  echo "         rm ~/Documents/Claude/Projects/\"$old\"     # stale symlink"
-  echo "         mirror link \"$new\""
+  echo "  On your OTHER Mac, once iCloud catches up (Claude quit there too):"
+  echo "        mirror project-repath \"$new\" \"$PROJECTS/$new\""
+  echo "        rm ~/Documents/Claude/Projects/\"$old\"     # only if a stale symlink is there"
+  echo "  Ownership history follows the rename; 'mirror log \"$new\"' should show it."
 }
 
 # ---- local project definitions (spaces.json) --------------------------------
@@ -468,7 +479,7 @@ e["folders"]=[{"path":path}]
 d.setdefault("spaces",[]).insert(0,e)
 json.dump(d,open(dst,"w"),indent=2)
 print(f'  added "{name}"')
-print(f'  folder: {path}' + ('' if os.path.exists(path) else '   <-- does not exist yet; run mirror link first'))
+print(f'  folder: {path}' + ('' if os.path.exists(path) else '   <-- not delivered yet; mirror receive will wait for it'))
 PY
   echo "  Relaunch Claude. The project appears with its name and instructions."
   echo "  Its chat history will be empty — that is expected; use 'mirror pickup' for context."

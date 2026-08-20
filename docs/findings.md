@@ -282,6 +282,34 @@ resolves it by listing the whole chain (`_handoff/`, `Projects/`, the project, `
 Practical consequence: **when a skill says something is missing from a shared folder, do not believe
 it until a terminal has looked.** Run `mirror receive`, or at minimum `ls` the parent chain.
 
+## 12b. A project's instructions reach the session prompt — which makes them a lock
+
+A local project's `instructions` field in `spaces.json` is copied verbatim into the Cowork
+session's `systemPrompt`. Verified 2026-08-20: a Quicken Reconciliation session's `systemPrompt`
+is 43,551 characters and contains that project's instructions exactly.
+
+Two properties make it useful as a checkout lock: it is **per-machine** (`spaces.json` is not
+synced), and it is read **before the user types**. So the sending Mac can carry a notice its own
+sessions obey while the receiving Mac sees nothing.
+
+`mirror send --hold` writes two things, both reversed by `receive`:
+
+- the notice, wrapped in `<!-- mirror:hold -->` markers
+- `folders[]` emptied, so a session that ignores the notice cannot read the folder at all
+
+The markers exist because `project-export` copies `instructions` wholesale. Without stripping,
+"CHECKED OUT TO Ji-su" would be exported *to* Ji-su and live in its system prompt permanently.
+Export and import both strip marked blocks.
+
+The original folder paths are stashed in `~/.config/claude-macos-mirror/held/<Project>.json`, not
+in `spaces.json`, because the app rewrites that file from memory and may drop keys it does not
+recognise — which would strand the project with no folder and no record of what it used to be.
+
+**Do not lock the files instead.** `chmod -R a-w` or `chflags uchg` on the project folder targets
+the wrong process: after a handoff that folder is exactly where iCloud must write the *other* Mac's
+changes. Mode bits may also propagate. Locking the project definition touches no file and leaves
+sync untouched.
+
 ## 13. Cowork on a cloud project runs in a bridged VM with per-session folder access
 
 A Cowork session started from a **cloud** project runs in a cloud VM (`/home/claude`, Linux) with a

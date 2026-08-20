@@ -22,6 +22,11 @@
 #   mirror link <Project>            DEPRECATED — symlinks break Cowork folder grants
 #   mirror rename <Old> <New>        rename a shared project everywhere
 #
+#   mirror hold <Project> --to <M>   lock THIS Mac out of a project it handed away:
+#                                    unlinks the folder and puts a notice in the
+#                                    project's instructions (send --hold does both)
+#   mirror release <Project>         undo that (receive does it automatically)
+#
 #   mirror project-list              local projects defined on THIS Mac
 #   mirror project-export <Name>     write a project definition into the shared tree
 #   mirror project-import <Name>     add an exported definition to THIS Mac
@@ -40,6 +45,10 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF="$HOME/.config/claude-macos-mirror/root"
+# Original folder paths, stashed while a project is held. Deliberately LOCAL and never
+# in spaces.json: the app rewrites that file from memory and may drop keys it does not
+# know, which would strand the project with no folder and no way back.
+HOLDDIR="$HOME/.config/claude-macos-mirror/held"
 default_root(){ echo "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude"; }
 resolve_root(){
   if [ -n "${MIRROR_ROOT:-}" ]; then echo "$MIRROR_ROOT"
@@ -292,6 +301,99 @@ cmd_rename(){
   echo "  Ownership history follows the rename; 'mirror log \"$new\"' should show it."
 }
 
+# ---- checkout lock ----------------------------------------------------------
+#
+# A handed-off project still sits on this Mac, fully readable, and nothing in iCloud
+# stops you editing it. Two writers to one synced folder fork rather than merge, so the
+# ownership log needs teeth on the sending side.
+#
+# Two spaces.json writes do it, both per-machine and both reversible:
+#   1. a banner prepended to the project's instructions. Verified 2026-08-20: a local
+#      project's instructions land verbatim in the Cowork session's systemPrompt, so
+#      the assistant reads the notice before you type and can refuse.
+#   2. folders[] emptied, so the session cannot read a byte even if it ignores the
+#      banner.
+# The banner is wrapped in markers that export and import always strip -- otherwise
+# "CHECKED OUT TO Ji-su" would travel TO Ji-su on the next send.
+HOLD_OPEN="<!-- mirror:hold -->"
+HOLD_CLOSE="<!-- /mirror:hold -->"
+
+cmd_hold(){
+  local name="" to=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) to="${2:-}"; shift 2;;
+      *)    [ -n "$name" ] || name="$1"; shift;;
+    esac
+  done
+  [ -n "$name" ] || die "usage: mirror hold <Project> --to <Machine>"
+  require_claude_quit
+  local f; f="$(spaces_file)" || die "no spaces.json on this Mac"
+  mkdir -p "$HOLDDIR"
+  cp "$f" "$f.bak-$(date +%Y%m%d-%H%M%S)"
+  python3 - "$f" "$name" "${to:-the other Mac}" "$HOLDDIR/$name.json" "$HOLD_OPEN" "$HOLD_CLOSE" <<'PY'
+import json,sys,os,datetime
+dst,name,to,stash,OPEN,CLOSE=sys.argv[1:7]
+d=json.load(open(dst))
+e=next((x for x in d.get("spaces",[]) if x.get("name")==name),None)
+if e is None: print(f'no local project named "{name}"',file=sys.stderr); sys.exit(1)
+folders=e.get("folders") or []
+if not folders and os.path.exists(stash):
+    print(f'  "{name}" is already held'); sys.exit(0)
+json.dump({"project":name,"folders":folders,
+           "held_at":datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+           "to":to}, open(stash,"w"), indent=2)
+ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+banner=(f"{OPEN}\n"
+  f"CHECKED OUT TO {to} since {ts}.\n"
+  f"This machine does NOT hold this project. Do not create, edit, move or delete any\n"
+  f"file in the project folder -- {to} is working in it, and two writers to one synced\n"
+  f"folder produce conflict copies, not merges. If you are asked to change anything\n"
+  f"here, refuse and say the project is checked out to {to}.\n"
+  f'To bring it back, the user runs in a terminal:  mirror receive "{name}"\n'
+  f"{CLOSE}\n\n")
+instr=e.get("instructions") or ""
+import re
+instr=re.sub(re.escape(OPEN)+r".*?"+re.escape(CLOSE)+r"\n*","",instr,flags=re.S)
+e["instructions"]=banner+instr
+e["folders"]=[]
+json.dump(d,open(dst,"w"),indent=2)
+print(f'  "{name}" held for {to}')
+print(f'      folder unlinked ({len(folders)} path(s) stashed) — Cowork here can read nothing')
+print(f'      notice added to the project instructions — sessions here will refuse to edit')
+PY
+  echo "  Relaunch Claude. Release it with:  mirror release \"$name\"   (or 'mirror receive')"
+}
+
+cmd_release(){
+  local name="${1:-}"; [ -n "$name" ] || die "usage: mirror release <Project>"
+  require_claude_quit
+  local f; f="$(spaces_file)" || die "no spaces.json on this Mac"
+  cp "$f" "$f.bak-$(date +%Y%m%d-%H%M%S)"
+  python3 - "$f" "$name" "$HOLDDIR/$name.json" "$PROJECTS/$name" "$HOLD_OPEN" "$HOLD_CLOSE" <<'PY'
+import json,sys,os,re
+dst,name,stash,fallback,OPEN,CLOSE=sys.argv[1:7]
+d=json.load(open(dst))
+e=next((x for x in d.get("spaces",[]) if x.get("name")==name),None)
+if e is None: print(f'no local project named "{name}"',file=sys.stderr); sys.exit(1)
+instr=e.get("instructions") or ""
+had=OPEN in instr
+e["instructions"]=re.sub(re.escape(OPEN)+r".*?"+re.escape(CLOSE)+r"\n*","",instr,flags=re.S)
+folders=e.get("folders") or []
+if not folders:
+    if os.path.exists(stash):
+        folders=json.load(open(stash)).get("folders") or []
+    if not folders:
+        folders=[{"path":fallback}]      # canonical shared path; mirror always uses it
+    e["folders"]=folders
+json.dump(d,open(dst,"w"),indent=2)
+if os.path.exists(stash): os.remove(stash)
+print(f'  "{name}" released' + ('' if had else ' (no hold notice was present)'))
+for x in e["folders"]: print(f'      folder: {x.get("path")}')
+PY
+  echo "  Relaunch Claude."
+}
+
 # ---- local project definitions (spaces.json) --------------------------------
 #
 # A project with a folder attached is machine-bound: it lives in this Mac's
@@ -410,6 +512,13 @@ e=next((x for x in d.get("spaces",[]) if x["name"]==name),None)
 if e is None:
     print(f'no local project named "{name}". Try: mirror project-list',file=sys.stderr); sys.exit(1)
 out=dict(e)
+# A hold banner is about THIS Mac's checkout state. Shipping it would tell the other
+# Mac its own project is checked out to itself, in its system prompt, forever.
+import re
+_open,_close="<!-- mirror:hold -->","<!-- /mirror:hold -->"
+if out.get("instructions"):
+    out["instructions"]=re.sub(re.escape(_open)+r".*?"+re.escape(_close)+r"\n*","",
+                               out["instructions"],flags=re.S)
 # folder paths are per-machine; the importer sets its own
 out["folders"]=[]
 out["_exported_from_paths"]=[p.get("path") for p in (e.get("folders") or [])]
@@ -473,6 +582,11 @@ import json,sys,os
 dst,src,projects=sys.argv[1],sys.argv[2],sys.argv[3]
 d=json.load(open(dst)); e=json.load(open(src))
 e.pop("_exported_from_paths",None)
+import re
+_open,_close="<!-- mirror:hold -->","<!-- /mirror:hold -->"
+if e.get("instructions"):   # defensive: a definition exported by an older mirror
+    e["instructions"]=re.sub(re.escape(_open)+r".*?"+re.escape(_close)+r"\n*","",
+                             e["instructions"],flags=re.S)
 name=e["name"]
 if any(x.get("id")==e.get("id") or x.get("name")==name for x in d.get("spaces",[])):
     print(f'  "{name}" already exists on this Mac — nothing to do'); sys.exit(0)
@@ -662,7 +776,7 @@ PY
 # proof that the bytes actually left this Mac. Replaces migrate/project-export/handoff/
 # materialize as a daily flow, and adds the upload check that had no equivalent.
 cmd_send(){
-  local name="" to="" note="" doc="" nodoc=0 wait_ack=0 force=0 timeout=900
+  local name="" to="" note="" doc="" nodoc=0 wait_ack=0 force=0 hold=0 timeout=900
   while [ $# -gt 0 ]; do
     case "$1" in
       --to)      to="${2:-}"; shift 2;;
@@ -670,12 +784,13 @@ cmd_send(){
       --doc)     doc="${2:-}"; shift 2;;
       --no-doc)  nodoc=1; shift;;
       --wait)    wait_ack=1; shift;;
+      --hold)    hold=1; shift;;
       --force)   force=1; shift;;
       --timeout) timeout="${2:-}"; shift 2;;
       *)         [ -n "$name" ] || name="$1"; shift;;
     esac
   done
-  [ -n "$name" ] || die "usage: mirror send <Project> --to <Machine> [--note ...] [--doc FILE] [--no-doc] [--force] [--wait]"
+  [ -n "$name" ] || die "usage: mirror send <Project> --to <Machine> [--note ...] [--doc FILE] [--no-doc] [--hold] [--force] [--wait]"
   [ -n "$to" ]   || die "--to <Machine> is required — name the Mac receiving this work"
   [ "$to" = "$ME" ] && die "--to is this Mac ($ME) — send to the other one"
   [ -d "$PROJECTS/$name" ] || die "'$name' is not in the shared tree ($PROJECTS)
@@ -753,6 +868,16 @@ PY
   local up=0; wait_uploaded "$name" "$timeout" || up=$?
   [ "$up" = 1 ] && die "the upload did not finish — do NOT edit '$name' here.
      Re-run 'mirror send' when the network settles; the event is already recorded."
+
+  if [ "$hold" = 1 ]; then
+    echo
+    if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+      echo "  ⚠ Claude is running, so this Mac was NOT locked out of '$name'."
+      echo "    Quit Claude, then:  mirror hold \"$name\" --to $to"
+    else
+      cmd_hold "$name" --to "$to"
+    fi
+  fi
 
   echo
   if [ "$up" = 2 ]; then
@@ -858,7 +983,18 @@ cmd_receive(){
   # 4. claim it, and show the document
   bash "$e" pickup "$name" || die "could not claim '$name'"
 
-  # 5. the whole point of the trip: get that document into the Cowork session
+  # 5. if this Mac locked itself out when it sent the project away, undo that now
+  if [ -f "$HOLDDIR/$name.json" ]; then
+    if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+      echo
+      echo "  ⚠ '$name' is still locked on this Mac and Claude is running."
+      echo "    Quit Claude, then:  mirror release \"$name\""
+    else
+      cmd_release "$name"
+    fi
+  fi
+
+  # 6. the whole point of the trip: get that document into the Cowork session
   if [ -n "$doc" ] && [ -f "$PROJECTS/$name/$doc" ] && command -v pbcopy >/dev/null 2>&1; then
     pbcopy < "$PROJECTS/$name/$doc"
     echo
@@ -880,6 +1016,8 @@ cmd_wait(){
 
 case "${1:-help}" in
   send)     shift; cmd_send "$@";;
+  hold)     shift; cmd_hold "$@";;
+  release)  shift; cmd_release "$@";;
   receive)  shift; cmd_receive "$@";;
   use-root) shift; cmd_use_root "$@";;
   deploy)   shift; cmd_deploy "$@";;

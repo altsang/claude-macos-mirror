@@ -347,6 +347,34 @@ Then open the project in Cowork and **⌘V**. That document is the receiving ses
 its own "Before you start" section carries the prerequisites, which is why `/pickup` is no longer
 installed here.
 
+### Locking yourself out of a project you handed away
+
+The ownership log records who holds a project; it cannot stop you editing the copy that stays on
+this Mac. `--hold` can:
+
+```bash
+./bin/mirror send "Quicken Reconciliation" --to Ji-su --note "…" --hold
+```
+
+Two `spaces.json` writes, both per-machine and both reversed by `mirror receive` when the project
+comes home:
+
+- **a notice in the project's instructions.** A local project's `instructions` land verbatim in the
+  Cowork session's `systemPrompt` (verified 2026-08-20), so every session you start here reads
+  *"CHECKED OUT TO Ji-su … refuse and say the project is checked out"* before you type a word.
+- **`folders[]` emptied**, so a session that ignores the notice still cannot read a byte.
+
+The banner is wrapped in `<!-- mirror:hold -->` markers that `project-export` and `project-import`
+always strip, so "checked out to Ji-su" can never travel *to* Ji-su.
+
+Both are `spaces.json` writes, so Claude must be quit — one quit covers both. If it's running,
+`send` completes the transfer and prints `mirror hold "PROJECT" --to Ji-su` to run afterwards.
+`mirror release "PROJECT"` undoes it by hand; `receive` does it for you.
+
+**What it does not cover:** anything outside Cowork — Finder, Excel, Quicken. Nothing in iCloud
+offers a lock, and locking the files themselves would block the sync daemon from writing the other
+Mac's changes back, which is worse than the problem.
+
 ### Why the split
 
 A Cowork session is sandboxed to its project folder — it cannot see `fileproviderctl`, the shared
@@ -393,6 +421,7 @@ The flags worth knowing on the daily pair:
 | `--wait` | `send` | after the upload, block until the other Mac claims it |
 | `--doc FILE` | `send` | name the document explicitly instead of taking the newest `HANDOFF*.md` |
 | `--no-doc` | `send` | ship files with no context — for a first move, or a folder that isn't a project |
+| `--hold` | `send` | lock this Mac out of the project until it comes back (below) |
 | `--force` | `send` | send a project the log says this Mac doesn't hold. Check `mirror log` first |
 | `--timeout N` | both | seconds for the whole wait (default 900) |
 

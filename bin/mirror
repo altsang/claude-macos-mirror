@@ -202,13 +202,29 @@ cmd_migrate(){
   local bak="$HOME/Documents/Claude/Projects/.$name.pre-icloud-$(date +%Y%m%d-%H%M%S)"
   mv "$src" "$bak" || die "could not move original aside"
   ok "original preserved at $bak"
+
+  # Moving the original breaks this project's existing grant, which still points at
+  # the old path. Repair it here rather than leaving the user with a project that
+  # silently cannot read its own files.
+  if pgrep -f "Claude.app/Contents/MacOS/Claude" >/dev/null 2>&1; then
+    echo
+    echo "  ⚠ Claude is running, so the folder grant could not be updated automatically."
+    echo "    '$name' still points at the path that was just moved, and will fail to read"
+    echo "    its files until this is fixed. Quit Claude, then run:"
+    echo "        mirror project-repath \"$name\" \"$dst\""
+  else
+    cmd_project_repath "$name" "$dst" >/dev/null 2>&1 \
+      && ok "folder grant repointed at the shared copy" \
+      || echo "  ! could not repoint the grant — run: mirror project-repath \"$name\" \"$dst\""
+  fi
   echo
   echo "  NO symlink is created, deliberately. Cowork registers a symlinked folder as"
   echo "  \"connected\" but then refuses every read inside it, because the resolved real"
   echo "  path is outside the connected scope. Verified 2026-08-19."
   echo
-  echo "  In the Claude app, grant this project the folder below (Add folder, then"
-  echo "  Cmd-Shift-G to paste a path Finder will not browse to):"
+  echo "  If the grant was repointed above, just relaunch Claude — you may get a fresh"
+  echo "  macOS permission prompt for the new path. Otherwise grant it manually"
+  echo "  (Add folder, then Cmd-Shift-G to paste a path Finder will not browse to):"
   echo "      $dst"
   echo
   echo "  That path is identical on both Macs. Keep the backup until Cowork reads the"

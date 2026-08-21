@@ -451,6 +451,7 @@ separate verbs — `send` and `receive` are those, composed, with the verificati
 ~/Library/Mobile Documents/com~apple~CloudDocs/Claude/
     Projects/PROJECT/                     shared files  ← the project reads THIS path
     Projects/PROJECT/.handoff/events/     append-only ownership log
+    Projects/PROJECT/.handoff/memory/TS-MACHINE/   memory snapshots, md5-manifested
     Projects/PROJECT/HANDOFF_topic.md     the context, written by /handoff
     _handoff/bin/coworkctl-v7.sh          engine (versioned — never edited in place)
     _handoff/projects/PROJECT.TS.json     exported project definitions, one per send
@@ -478,6 +479,7 @@ two-writer hazard that produces conflict copies.
 | Skill upload rejected, "cannot have XML tags" | angle-bracket placeholders in `SKILL.md` | use bare words, not `<Project>` |
 | Project missing on the other Mac | local projects don't sync | `mirror send "P" --to MACHINE --no-doc`, then `mirror receive "P"` |
 | Not sure the files actually reached iCloud | `handoff` only staged them; nothing verified the upload | `mirror send` — it polls `isUploaded` until every file is up |
+| `receive` says memory "NOT overwriting" | this Mac already built its own store for the project — the guardrail, not an error | keep yours (do nothing), or `mirror memory-install "P" --force` to take theirs; yours is backed up first |
 
 [docs/findings.md](docs/findings.md) has the measurements behind each of these, and the two commands
 that destroyed data during development.

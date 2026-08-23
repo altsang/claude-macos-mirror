@@ -1,6 +1,6 @@
 <div align="center">
 
-# claude-macos-mirror
+# Claude MacOS Mirror
 
 ### Move a Claude **Cowork** workload between two Macs — the files, the project, and the context — with one command per side.
 
@@ -92,7 +92,7 @@ So three separate things have to travel, and only the first has a native path:
 
 ## What this does — and doesn't
 
-**It does not sync your files.** iCloud (or Google Drive, or Dropbox) does that. What this adds:
+**Claude MacOS Mirror does not sync your files.** iCloud (or Google Drive, or Dropbox) does that. What it adds:
 
 - **Migration** — moves a project into the shared tree and md5-verifies every file before touching the original.
 - **An ownership log** — both Macs know which one holds a project, which is what prevents the conflict copies two machines editing one synced folder produce.

@@ -1,4 +1,4 @@
-# Measured findings
+# Claude MacOS Mirror — measured findings
 
 Everything here was verified on macOS 26.6.2 (Ji-su) and Darwin 25.5 (Madoka) on 2026-08-18.
 These are not style preferences — each one cost real debugging time, and several look like

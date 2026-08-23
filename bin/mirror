@@ -1,5 +1,6 @@
 #!/bin/bash
-# mirror — manage Claude Cowork project mirroring between two Macs.
+# mirror — the Claude MacOS Mirror CLI: manage Claude Cowork project
+#          mirroring between two Macs.
 #
 #   Setup verbs run from this repo. Runtime verbs are delegated to the versioned
 #   engine deployed in the shared tree (see bin/VERSIONING.md for why it is

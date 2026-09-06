@@ -425,6 +425,57 @@ is per-project state, and putting it outside made the skill unusable from within
 Confirmed empirically: `parallels-windows-apps` was present on Ji-su at the identical path with
 matching account UUIDs, without anyone copying it. Do not build skill-syncing machinery.
 
+
+## 16. `receive` could never materialize the one file it reads first
+
+Found 2026-09-06, after a `mirror receive` on Ji-su burned its full 900s timeout and reported
+`Newest event: none` — while the event sat in the folder, delivered, at its correct size.
+
+```
+$ ls -l …/Junipera - MS Korea ATU Partnership/.handoff/events/
+-rw------- 1 altsang 328 Sep  6 11:29 20260906T182927Z-Madoka-handoff.json
+$ cat …/events/*.json
+                                    # ← 328 bytes listed, nothing behind them
+```
+
+Dataless, exactly as finding 12 describes. Two defects turned that into a 15-minute dead end
+pointed at the wrong machine:
+
+**The materializing walker skips the events directory.** `wait_for_files`' `present()` is the only
+code that forces a pull, using `st_size>0 and st_blocks==0` to detect a dataless file and a
+whole-file binary read to fix it. Its very first line is:
+
+```python
+for dp,_,fn in os.walk(root):
+    if ".handoff" in dp.split(os.sep): continue
+```
+
+So the project's files get materialized and `.handoff/events/` never does. `newest_event` read it
+with a plain `json.load(open(...))`, which returns empty on a dataless file **without** forcing the
+pull. `receive` polls that function every 6s and materializes nothing, so a dataless event is not
+slow to arrive — it never resolves at all, at any timeout.
+
+**"Absent" and "unreadable" reported identically.** Both branches ended `sys.exit(1)`:
+
+```python
+if not fs: sys.exit(1)              # nothing on the drive
+try: e=json.load(open(fs[-1]))
+except Exception: sys.exit(1)       # present, but empty or corrupt
+```
+
+`receive` printed `Newest event: none` for either, and the accompanying advice — check the sender
+ran `send`, check `scutil --get ComputerName` — sends you to the **other** Mac, which is the one
+place the problem was not. Everything on the sender verified clean: `isUploaded = 1` on all six
+files, matching iCloud account, matching root, correct `to:` field.
+
+Fixed in `bin/mirror`: `newest_event` now materializes a dataless event with the same read
+`present()` uses, and exits **2** for present-but-unreadable versus **1** for absent. `receive`
+carries the code through its poll loop and says which one it hit, with the two commands that show
+it. The general rule this is an instance of: **on a synced drive, listing a file proves nothing —
+only a read does**, and any code path that treats a failed read as absence will point the user at
+the wrong machine.
+
+
 ---
 
 ## Two commands that caused damage during development

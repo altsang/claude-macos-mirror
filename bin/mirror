@@ -584,13 +584,29 @@ PY
 
 # Newest ownership event as: verb, machine, to, at, doc. Non-zero if there is none.
 # Filenames lead with the UTC timestamp, so sorting them is sorting by time.
+# Exit 1 = no event on the drive. Exit 2 = an event is THERE but will not parse.
+# Those are different problems and must not report as the same one: "none" sent a
+# 15-minute receive at the wrong Mac on 2026-09-06 when the event was sitting in the
+# folder the whole time, dataless.
 newest_event(){
   python3 - "$PROJECTS/$1/.handoff/events" <<'PY'
 import os,sys,json,glob
 fs=sorted(glob.glob(os.path.join(sys.argv[1],"*.json")))
 if not fs: sys.exit(1)
-try: e=json.load(open(fs[-1]))
-except Exception: sys.exit(1)
+f=fs[-1]
+# Events arrive DATALESS like everything else on the drive -- right size in a listing,
+# no content, and a read returns empty with NO error. wait_for_files pulls the project
+# this way but deliberately skips .handoff/, so nothing else ever materializes the one
+# file receive has to read FIRST. Force it here, with the same whole-file binary read
+# present() uses, or receive waits out its entire timeout on an event already delivered.
+try:
+    st=os.stat(f)
+    if st.st_size>0 and st.st_blocks==0:
+        with open(f,"rb") as fh:
+            while fh.read(1<<20): pass
+except OSError: pass
+try: e=json.load(open(f))
+except Exception: sys.exit(2)
 print("\t".join([e.get("verb",""),e.get("machine",""),e.get("to","") or "",
                  e.get("at",""),e.get("handoff_doc","") or ""]))
 PY
@@ -1063,22 +1079,23 @@ cmd_receive(){
 
   # 1. the ownership event addressed to this Mac
   echo "receiving '$name' on $ME"
-  local ev verb machine to at doc ready=0
+  local ev verb machine to at doc ready=0 evrc=0
   if ev="$(newest_event "$name")"; then
     IFS=$'\t' read -r verb machine to at doc <<< "$ev"
     { [ "$verb" = "handoff" ] && [ "$to" = "$ME" ]; } && ready=1
     { [ "$verb" = "claim" ] && [ "$machine" = "$ME" ]; } && ready=2
-  fi
+  else evrc=$?; fi
   if [ "$ready" = 0 ]; then
     echo "waiting for a handoff addressed to $ME..."
     while [ $((SECONDS-start)) -lt "$timeout" ]; do
       ls "$HANDOFF" >/dev/null 2>&1; ls "$PROJECTS" >/dev/null 2>&1
       ls "$PROJECTS/$name" >/dev/null 2>&1; ls "$PROJECTS/$name/.handoff/events" >/dev/null 2>&1
       if ev="$(newest_event "$name")"; then
+        evrc=0
         IFS=$'\t' read -r verb machine to at doc <<< "$ev"
         { [ "$verb" = "handoff" ] && [ "$to" = "$ME" ]; } && { ready=1; break; }
         { [ "$verb" = "claim" ] && [ "$machine" = "$ME" ]; } && { ready=2; break; }
-      fi
+      else evrc=$?; fi
       printf "\r  %ds" $((SECONDS-start)); sleep 6
     done
     echo
@@ -1088,7 +1105,15 @@ cmd_receive(){
   case "$ready" in
     1) echo "  handed off by $machine at $at";;
     2) echo "  already claimed by $ME at $at — re-verifying and refreshing the document";;
-    *) die "no handoff to $ME arrived for '$name' within ${timeout}s.
+    *) if [ "$evrc" = 2 ]; then
+         die "an event for '$name' IS on the drive but could not be read after ${timeout}s.
+     That is a delivery problem, not a missing handoff — the file is listed at its full
+     size with no content behind it. Check the drive is awake and has space, then re-run.
+     To see it for yourself:
+         ls -l \"$PROJECTS/$name/.handoff/events\"    # the file is there
+         cat \"$PROJECTS/$name/.handoff/events\"/*.json   # and reads empty"
+       fi
+       die "no handoff to $ME arrived for '$name' within ${timeout}s.
      Newest event: ${verb:-none} ${machine:+by $machine}${to:+ -> $to} ${at:-}
      Check the sender ran: mirror send \"$name\" --to $ME   (and that the name matches
      'scutil --get ComputerName' over there), or look at: mirror status";;

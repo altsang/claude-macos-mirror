@@ -839,7 +839,10 @@ while time.time()-start<timeout:
     if expected:
         n=expected["count"]; tb=expected["bytes"]
         pct=int(100*mat/n) if n else 100
-        bar="█"*(pct//5)+"░"*(20-pct//5)
+        # A project can hold MORE files than its manifest -- work continued after the
+        # handoff. Clamp the bar so it stays 20 cells; the raw counts below stay honest.
+        fill=min(20,max(0,pct//5))
+        bar="█"*fill+"░"*(20-fill)
         line=f"  [{bar}] {pct:3d}%  {mat}/{n} files materialized, {byts/1000:.0f}/{tb/1000:.0f} KB   {el}s"
     else:
         line=f"  {have} files present, {mat} materialized, {byts/1000:.0f} KB   {el}s"

@@ -370,12 +370,18 @@ bridge to the Mac — it reports the machine as e.g. `ji-su-local`. Two conseque
 - **Folder access is per session, not per project.** A folder attached to the project does not
   reach a conversation; each session needs its own grant. Its picker offered only Desktop,
   Downloads, or a typed path.
-- Grants under `~/Library` did not succeed through the bridge in testing, whereas a **local**
-  Cowork session (the `Local`-badged kind) reads the same iCloud path without trouble — ten
-  sessions have run against `~/Library/Mobile Documents/…` folders successfully.
+- Grants under `~/Library` did not succeed through the bridge *in the original testing*. **That
+  is now known to be wrong** — see the correction below.
 
-So for file-heavy work, use a **local** project. Cloud projects are better when you want chats,
-instructions and memory to sync; local projects are what actually reach the disk.
+**Corrected 2026-09-25.** Two of Ji-su's remote Quicken sessions hold
+`~/Library/Mobile Documents/com~apple~CloudDocs/Claude/Projects/Quicken Reconciliation` as their
+granted folder and wrote into it continuously from 2026-08-20 to 2026-09-05 — the reconciliation
+notes in that folder are their output. So a bridged session *can* be granted an iCloud path under
+`~/Library`; whatever failed in the first test was not a general rule. Do not plan around that
+limitation.
+
+What survives: folder access really is **per session, not per project**, so each new conversation
+needs its own grant. That is the durable half of this finding.
 
 ## 14. A Cowork session is sandboxed to its granted folder — put per-project state inside it
 
@@ -474,6 +480,53 @@ carries the code through its poll loop and says which one it hit, with the two c
 it. The general rule this is an instance of: **on a synced drive, listing a file proves nothing —
 only a read does**, and any code path that treats a failed read as absence will point the user at
 the wrong machine.
+
+
+
+## 17. There are TWO session stores — and only one of them syncs
+
+Established 2026-09-25, after a day spent on the wrong premise.
+
+```
+local-agent-mode-sessions/<account>/<org>/
+    local_<uuid>.json + local_<uuid>/     host-loop sessions — run ON this Mac, never sync
+    remote-session-spaces.json            a CACHE of folder grants for server-side sessions
+```
+
+Counted: Madoka 723 local / 19 remote-cache entries; Ji-su 60 local / 6. The two Macs' remote-cache
+files have **zero session ids in common** — and yet the same remote conversation displays on both.
+
+That is the whole point. `remote-session-spaces.json` is **not a session list**. It records only the
+folder grants a session was given *on this Mac*, so it is inherently per-machine. The sessions
+themselves are server-side, and every Mac signed into the account fetches them.
+
+**Demonstrated.** The session `Ji-su : Quicken Reconciliation - fix lots and cost basis` (remote,
+last message 2026-09-05) appears on Ji-su *and* on Madoka. Its figures — Blackstone $188.34,
+$640.56, 292.76225381 sh, 0.139 shares, 469.259 — are all present in
+`blackstone_lp_basis_edit_2026-09-03.md`, `sarah_ira_differences_VERIFIED_2026-09-02.md` and
+`bgig_zero_basis_lots_2026-08-31.md` in the shared folder. It wrote those files.
+
+**The consequence is large: to move a workload's conversation between Macs, run it as a remote
+session.** No tooling, no copying, nothing to build. Host-loop sessions are the ones that strand —
+`MS Korea Copilot sales strategy` sat on Madoka with `hostLoopMode: true` and could never have
+travelled. This retires the idea of mirroring the session store (3.3 GB on Madoka, 1.1 GB of it hot
+append-only `audit.jsonl`), which was being seriously considered the same day.
+
+`mirror` still earns its place — remote sessions do no file transfer, no md5 verification and no
+ownership record. But its *rationale* is narrower than the docs claimed.
+
+**How this was got wrong, three times in one day.** Each time, one store was checked, nothing was
+found, and "nothing found" was reported as "nothing exists":
+
+| Reported | Actually |
+|---|---|
+| `Newest event: none` | the event was there, dataless (finding 16) |
+| `the files did not all arrive` | they arrived Aug 19; 2 of 19 were edited after |
+| `0 Cowork sessions, ever` | 3 remote sessions — only `local_*.json` had been globbed |
+
+Finding 7's lesson was "find the file that stores it before concluding it is impossible." The
+sharper version: **find every file that stores it.** An absence is only evidence once you know you
+searched the whole space — and a tool that reports absence should say which store it looked in.
 
 
 ---

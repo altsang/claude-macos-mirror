@@ -18,7 +18,7 @@
 |---|---|
 | Files in a shared-drive folder | ✅ the drive does this — no tooling needed |
 | Custom Cowork skills | ✅ automatically, at the account level. Never copy them by hand |
-| Cloud projects — chats, instructions, memory | ✅ server-side |
+| Cloud projects + **remote** sessions — chats, instructions, memory | ✅ server-side, both Macs |
 | **A project with a local folder** (`Local` badge) | ⚠️ the definition is copyable; nothing is automatic |
 | **Conversations in a local project** | ❌ never — this is why the handoff document exists |
 | **A local project's accumulated memory** | ❌ natively — but `send`/`receive` carry it |
@@ -77,7 +77,7 @@ flowchart TB
     Q["You want to continue<br/>on the other Mac"] --> C
     Q --> L
     C["Cloud project<br/>chats + memory sync ✅"] -->|"sessions run in a bridged VM"| CF["can't reach your files ❌"]
-    L["Local project<br/>reads your folder ✅"] -->|"machine-bound in spaces.json"| LF["no chat sync;<br/>memory stays on that Mac ❌"]
+    L["Local project<br/>reads your folder ✅"] -->|"machine-bound in spaces.json"| LF["host-loop chats don't sync;<br/>memory stays on that Mac ❌"]
 ```
 
 **File access and synced context are mutually exclusive today.** That gap is what this repo fills.
@@ -97,7 +97,7 @@ So three separate things have to travel, and only the first has a native path:
 - **Migration** — moves a project into the shared tree and md5-verifies every file before touching the original.
 - **An ownership log** — both Macs know which one holds a project, which is what prevents the conflict copies two machines editing one synced folder produce.
 - **Materialization** — forces the drive to deliver file *contents*, not just names.
-- **A handoff document** — the only mechanism that carries context to a machine whose project cannot sync its chats. `send` refuses to ship a project without one.
+- **A handoff document** — the mechanism that carries context when the chat can't travel. That is the case for **host-loop** sessions, which are machine-bound; a *remote* session's chat already appears on both Macs ([finding 17](docs/findings.md)). `send` refuses to ship a project without one.
 - **Folder linking without the file picker** — `mirror` writes the project's folder path itself, on both Macs.
 - **Upload verification** — proof the bytes actually left this Mac, which "staged" never gave you.
 - **One verb per side** — `send` and `receive`, each blocking until the transfer is provable, instead of a sequence of commands none of which could confirm the others' work.
@@ -254,7 +254,7 @@ Use the **`Local`**-badged project for file work. Cloud projects run their sessi
 
 | Where | Step | What it guarantees |
 |---|---|---|
-| Cowork, on the Mac you're leaving | `/handoff` | Writes `HANDOFF_TOPIC.md` into the project folder and stops. That document is the whole payload — a local project cannot sync its chats, so anything you knew and didn't write down is lost here |
+| Cowork, on the Mac you're leaving | `/handoff` | Writes `HANDOFF_TOPIC.md` into the project folder and stops. For a **host-loop** session that document is the whole payload — the chat is machine-bound, so anything you knew and didn't write down is lost here. From a *remote* session it's a convenience; the conversation already crosses |
 | Terminal, same Mac | `mirror send "P" --to Ji-su --note "…" --wait` | Materializes the folder, exports the project definition, writes an md5 manifest, snapshots memory, records the ownership event naming your document — then blocks until every file reports `isUploaded`, and with `--wait` until the other Mac claims it |
 | Terminal, other Mac | `mirror receive "P"` | Waits for the event addressed to *this* Mac, pulls and **md5-verifies every file**, defines the project here if this Mac has never seen it (the one step that needs Claude quit), claims it, prints the handoff document and copies it to the clipboard |
 | Cowork, other Mac | **⌘V** | The brief, in front of the session that has to act on it |

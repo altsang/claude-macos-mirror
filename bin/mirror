@@ -724,7 +724,8 @@ cmd_project_import(){
     local left=$(( timeout - (SECONDS - start) ))
     [ "$left" -lt 60 ] && left=60
     echo "waiting for the project's files..."
-    wait_for_files "$name" "$left" || die "the files did not all arrive — nothing was imported.
+    wait_for_files "$name" "$left" || die "the files did not all arrive, or differ from the
+     manifest (see above) — nothing was imported.
      Re-run when the other Mac is awake, or import the definition alone with
      'mirror project-import \"$name\"' and materialize later with 'mirror wait \"$name\"'."
   fi
@@ -852,9 +853,12 @@ while time.time()-start<timeout:
                 if hashlib.md5(open(fp,"rb").read()).hexdigest()!=f["md5"]: bad.append(f["path"])
             except OSError: bad.append(f["path"])
         if bad:
-            print(f"  {len(bad)} file(s) differ from the manifest:")
+            # EXIT 2, not 1: these files ARE here. They were delivered and then edited,
+            # which is a different thing from never arriving and must not print as it.
+            print(f"  {len(bad)} of {expected['count']} file(s) differ from the manifest:")
             for b in bad[:5]: print(f"      {b}")
-            sys.exit(1)
+            if len(bad)>5: print(f"      … and {len(bad)-5} more")
+            sys.exit(2)
         print(f'  ✓ all {expected["count"]} files delivered and verified by md5 in {el}s')
         sys.exit(0)
     # no manifest: settle for two quiet rounds
@@ -1123,8 +1127,19 @@ cmd_receive(){
   #    not dataless, so a listing alone can never tell you the transfer was complete.
   local left=$(( timeout - (SECONDS - start) )); [ "$left" -lt 60 ] && left=60
   echo "waiting for the files:"
-  wait_for_files "$name" "$left" || die "the files did not all arrive — nothing was claimed.
+  local wfrc=0; wait_for_files "$name" "$left" || wfrc=$?
+  if [ "$wfrc" = 2 ]; then
+    die "'$name' has been EDITED since it was handed over — nothing was claimed.
+     The files above are present; they no longer match the manifest written at handoff.
+     That is normal when work continued here without running 'mirror receive' (a Cowork
+     session does the work; it never records a claim). Nothing is wrong with the data.
+     Close it properly from the Mac that did the work:
+         mirror send \"$name\" --to <the other Mac> --note \"...\"
+     which writes a fresh manifest from the current files, then receive there."
+  elif [ "$wfrc" != 0 ]; then
+    die "the files did not all arrive — nothing was claimed.
      Re-run when $machine is awake; 'mirror status' shows who holds it."
+  fi
 
   # 3. define the project here if this Mac has never seen it (the only step needing a quit)
   if have_project "$name"; then

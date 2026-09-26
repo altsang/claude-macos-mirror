@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Write the handoff document that lets the user's other Mac (Madoka / Ji-su) continue this work. Use when the user says to hand off, move, send, or continue work on their other machine or laptop, or invokes /handoff by name. Captures everything the receiving machine needs into a self-contained document, then hands the transfer itself to the mirror CLI. Use this instead of improvising a summary, because a local Cowork project cannot sync its chats and the other machine starts with no memory of this conversation.
+description: Write the handoff document that lets the user's other Mac (Madoka / Ji-su) continue this work. Use when the user says to hand off, move, send, or continue work on their other machine or laptop, or invokes /handoff by name. Captures everything the receiving machine needs into a self-contained document, then hands the transfer itself to the mirror CLI. Use this instead of improvising a summary, because a host-loop Cowork session cannot sync its chat and the other machine starts with no memory of this conversation.
 ---
 
 # Hand off a workload to the other Mac
@@ -21,10 +21,23 @@ point.
 
 ## Why the document matters more than the bytes
 
-The receiving Mac gets the **files** from the drive automatically. It does **not** get this
-conversation, and it cannot: **chat is not available for local Cowork projects**, so there is no
-synced history and no project memory to fall back on. Everything you know that isn't written down
-is lost at the handoff.
+The receiving Mac gets the **files** from the drive automatically. Whether it gets this
+*conversation* depends on which kind of session you are:
+
+- **Host-loop session** (runs on this Mac; `local_<uuid>.json` on disk) — the chat is machine-bound
+  and cannot travel. This document is the only carrier. That is the case this skill is for.
+- **Remote session** (server-side) — the chat already appears on both Macs. Writing a handoff
+  document is then optional; say so rather than implying the context would be lost.
+
+If you are unsure which you are, write the document. It is never wrong, only sometimes redundant.
+
+Project memory is a separate thing and it does exist — a local project keeps one under
+`spaces/<id>/memory/` — but it is **per-machine**, so the receiving Mac still starts blank unless
+`mirror send` carried a snapshot. Do not tell the user there is no memory; tell them it does not
+travel by itself.
+
+Everything you know that isn't written down, and isn't in one of those two channels, is lost at the
+handoff.
 
 ## Step 1 — Identify the project and the target
 

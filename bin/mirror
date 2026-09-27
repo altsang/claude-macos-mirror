@@ -107,22 +107,23 @@ cmd_deploy(){
     ok "deployed $(basename "$f")"
   done
   [ -f "$HERE/bin/VERSIONING.md" ] && cp "$HERE/bin/VERSIONING.md" "$HANDOFF/bin/README.md" && ok "deployed bin/README.md"
-  if command -v zip >/dev/null 2>&1; then
-    local tmp; tmp="$(mktemp -d)"
-    for k in handoff pickup; do
-      [ -f "$HERE/skills/$k/SKILL.md" ] || continue
-      mkdir -p "$tmp/$k"; cp -R "$HERE/skills/$k/." "$tmp/$k/"
-      (cd "$tmp" && rm -f "$HANDOFF/$k.skill" && zip -q -D -r "$HANDOFF/$k.skill" "$k" -x '.*')
-      ok "packaged $k.skill"
-    done
-    rm -rf "$tmp"
-  else
-    echo "  ! zip not found — skill bundles not packaged"
-  fi
+  # Skill bundles are NOT packaged here any more. Skills sync at the account level
+  # (finding 15): uploading skills/handoff/SKILL.md through Claude's own Settings on
+  # ONE Mac puts it on both. A .skill zip in the shared tree duplicated that, and a
+  # stale zip beside a live skill is worse than no zip -- someone installs the old
+  # copy months later and silently gets superseded instructions. Removed 2026-09-26,
+  # after the Aug 20 bundles outlived a correction to the skill's own premises.
+  for k in handoff pickup; do
+    if [ -f "$HANDOFF/$k.skill" ]; then
+      rm -f "$HANDOFF/$k.skill"        # exact path, never a glob
+      ok "removed stale $k.skill (skills sync at the account level)"
+    fi
+  done
   echo
-  echo "Note: the engine and skill bundles live inside the shared tree, so the OTHER Mac"
-  echo "receives them through the shared drive automatically. The 'mirror' CLI itself"
-  echo "travels by git, so run 'git pull' over there after changing it."
+  echo "Note: the ENGINE lives inside the shared tree, so the other Mac receives it"
+  echo "through the drive automatically. The 'mirror' CLI travels by git, so run"
+  echo "'git pull' over there after changing it. The /handoff SKILL is installed"
+  echo "through Claude Settings -> Skills -> Add on either Mac and syncs by account."
   echo "On the other Mac you need 'mirror use-root' only if its shared path differs;"
   echo "projects arrive with 'mirror receive <Project>'."
 }

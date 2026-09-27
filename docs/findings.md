@@ -431,6 +431,19 @@ is per-project state, and putting it outside made the skill unusable from within
 Confirmed empirically: `parallels-windows-apps` was present on Ji-su at the identical path with
 matching account UUIDs, without anyone copying it. Do not build skill-syncing machinery.
 
+Installed skills land in a per-account plugin tree, which is why a search of the obvious places
+finds nothing:
+
+```
+local-agent-mode-sessions/skills-plugin/<org>/<account>/skills/<name>/SKILL.md
+```
+
+**Acted on 2026-09-26.** `mirror deploy` used to zip `handoff.skill` and `pickup.skill` into the
+shared tree. That duplicated a mechanism that already works, and the copies went stale: the Aug 20
+bundles outlived a correction to the skill's own premises (finding 17) and would have handed
+someone superseded instructions months later. `deploy` now deletes them instead of writing them,
+by exact path.
+
 
 ## 16. `receive` could never materialize the one file it reads first
 

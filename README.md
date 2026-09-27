@@ -146,14 +146,14 @@ cd ~/workspace/claude-macos-mirror
 ./bin/mirror check          # ✓ shared tree present  ← if ✗, the drive hasn't synced yet. Fix that first.
 ```
 
-On the second machine `deploy` is optional — the engine and skill bundles live *inside* the shared tree, so the drive delivers them.
+On the second machine `deploy` is optional — the engine lives *inside* the shared tree, so the drive delivers it. The skill needs no delivery at all: skills sync at the account level ([finding 15](docs/findings.md)).
 
 Everything hinges on one folder **both Macs can see**. iCloud Drive is the default and needs no configuration:
 
 ```
 ~/Library/Mobile Documents/com~apple~CloudDocs/Claude/
     Projects/PROJECT/       ← your project files; this is the folder the project reads
-    _handoff/               ← engine, skill bundles, exported project definitions
+    _handoff/               ← engine, exported project definitions, ownership events
 ```
 
 <details>
@@ -371,7 +371,7 @@ The flags worth knowing on the daily pair:
     _handoff/bin/coworkctl-v7.sh                   engine (versioned — never edited in place)
     _handoff/projects/PROJECT.TS.json              exported project definitions, one per send
     _handoff/projects/PROJECT.TS.manifest.json     sizes + md5s, what receive verifies against
-    _handoff/{handoff,pickup}.skill                importable skill bundles
+
 ```
 
 Releases are new files, never edits: the drive does not reliably propagate an in-place modification of a file the other Mac has already read. Callers resolve `coworkctl-v*.sh | sort -V | tail -1`.
